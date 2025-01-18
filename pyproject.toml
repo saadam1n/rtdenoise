@@ -4,11 +4,12 @@ version = "0.0.1"
 description = "Denoising library for Monte Carlo path traced images."
 readme = "README.md"
 requires-python = ">=3.8"
+dependencies  = [
+    "torch", "opencv-python",
+]
 
 [build-system]
 requires = [
     "setuptools",
-    "opencv-python",
-    "torch",
 ]
 build-backend = "setuptools.build_meta"
