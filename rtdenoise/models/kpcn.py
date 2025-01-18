@@ -12,9 +12,9 @@ A version of KPCN that utilizes depth-wise convolutions and the MetaFormer archi
 """
 class FastKPCN(BaseDenoiser):
     def init_components(self):
-        self.num_internal_channels = 32
-        self.num_kernels = 13
-        self.kernel_dim = 7
+        self.num_internal_channels = 48
+        self.num_kernels = 20
+        self.kernel_dim = 21
 
         self.kernel_predictor = nn.Sequential(
             # skip batch norm for the first layer since I've found it messes with the denoiser for some reason

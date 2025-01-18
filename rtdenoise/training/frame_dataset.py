@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 import random
+import subprocess
+from torch.utils.data import Dataset
 
 # We need this so OpenCV imports exr files
 import os
@@ -8,7 +10,7 @@ os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"
 
 import cv2
 
-class FrameDataSet:
+class FrameDataset(Dataset):
     def __init__(self, base_dir, dataset_folder, device, seq_len):
         self.dataset_dir = base_dir + "/" + dataset_folder
         self.cache_dir = base_dir + "/CacheV2"
@@ -16,7 +18,8 @@ class FrameDataSet:
 
         self.num_frames=0
         while True:
-            if os.path.exists(self.dataset_dir + str(self.num_frames) + "-Reference.exr"):
+            
+            if os.path.exists(self.dataset_dir + "/" + str(self.num_frames) + "-Reference.exr"):
                 self.num_frames+=1
             else:
                 break
@@ -108,12 +111,12 @@ class FrameDataSet:
     def read_exr(self, idx, ext):
         filename = str(idx) + "-" + ext + ".exr"
 
-        cache_path = self.cache_dir + filename + ".npy"
+        cache_path = self.cache_dir + "/" + filename + ".npy"
 
         if os.path.exists(cache_path):
             img = np.load(cache_path)
         else:
-            img = cv2.imread(self.dataset_dir + filename, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH).astype(np.float32)
+            img = cv2.imread(self.dataset_dir + "/" + filename, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH).astype(np.float32)
             np.save(cache_path, img)
 
         return torch.tensor(img, device="cpu", dtype=torch.float32)

@@ -8,6 +8,8 @@ This component automatically applies ReLU at the end
 """
 class DepthWiseConvFormer(nn.Module):
     def __init__(self, num_input_channels, kernel_size=3, expansion_ratio=2):
+        super().__init__()
+
         self.token_mixer = nn.Sequential(
             nn.BatchNorm2d(num_input_channels),
             nn.Conv2d(num_input_channels, num_input_channels, kernel_size=kernel_size, padding=kernel_size // 2, groups=num_input_channels),
