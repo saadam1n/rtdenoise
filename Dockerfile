@@ -8,5 +8,5 @@ RUN apt-get update && apt-get install ffmpeg libsm6 libxext6  -y
 
 RUN pip install . -v
 
-CMD ["python3", "scripts/sample_train.py"]
+CMD ["python3", "-u", "scripts/sample_train.py"]
  

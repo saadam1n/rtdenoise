@@ -12,7 +12,7 @@ if __name__ == "__main__":
     else:
         raise RuntimeError("Unable to find suitable GPU for training!")
 
-    dataset = rtdenoise.FrameDataset("/home/saada/Datasets", "Dataset0", device, 20)
+    dataset = rtdenoise.FrameDataset("data/", "Dataset0", device, 20)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
     model = rtdenoise.FastKPCN().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
@@ -22,7 +22,7 @@ if __name__ == "__main__":
 
 
     print("Losses over time:")
-    f = open("results/losses.csv", "w")
+    f = open("results/latest-losses.csv", "w")
     f.write("Epoch, Loss\n")
     for i, loss in enumerate(losses):
         print(f"\tEpoch {i}:\t{loss}")
