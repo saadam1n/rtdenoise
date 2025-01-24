@@ -48,9 +48,9 @@ class FrameDataset(Dataset):
         # C = channels for each frame (color, albedo, world pos, world norm)
 
         if True:
-            if False:
-                yoff = random.randint(0, 720)
-                xoff = random.randint(0, 1280)
+            if True:
+                yoff = random.randint(0, 1080 - 512)
+                xoff = random.randint(0, 1920 - 512)
             else:
                 yoff = int(random.gauss(450, 300))
                 xoff = int(random.gauss(450, 500))
@@ -72,8 +72,8 @@ class FrameDataset(Dataset):
             (frame_input, frame_reference) = self.read_frame(idx + i)
 
             if self.patching:
-                frame_input = frame_input[:, yoff:yoff+360, xoff:xoff+640]
-                frame_reference = frame_reference[:, yoff:yoff+360, xoff:xoff+640]
+                frame_input = frame_input[:, yoff:yoff+512, xoff:xoff+512]
+                frame_reference = frame_reference[:, yoff:yoff+512, xoff:xoff+512]
 
             frame_inputs.append(frame_input)
             frame_references.append(frame_reference)
@@ -129,3 +129,4 @@ class FrameDataset(Dataset):
 
     def print_shape(name, img):
         print(f"{name}\tshape is {img.shape}")
+
