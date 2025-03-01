@@ -69,8 +69,7 @@ class KernelMatchingFormer(nn.Module):
         ) if num_input_channels != num_output_channels else None
 
     def forward(self, input):
-        # this residual connection is meaningless but since MetaFormer does it I may as well myself (it's also really cheap)
-        features = self.dw_conv(input) + input
+        features = self.dw_conv(input)
 
         residual_connection = self.res_projection(features) if self.res_projection is not None else features
 
