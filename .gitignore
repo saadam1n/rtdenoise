@@ -172,7 +172,3 @@ cython_debug/
 
 # .vscode folder
 .vscode
-
-results/
-kubernetes/
-data/
