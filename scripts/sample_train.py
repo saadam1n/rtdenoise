@@ -84,6 +84,7 @@ if __name__ == "__main__":
                     f.write(f"{i // 3}, {still_loss.item()}\n")
 
                     exr.imwrite(dump_path + f"frame{i // 3}.exr", still_frame.permute(1, 2, 0).cpu().numpy())
+
             
 
 

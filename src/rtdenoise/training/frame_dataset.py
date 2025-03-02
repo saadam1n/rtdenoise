@@ -81,34 +81,47 @@ class FrameDataset(Dataset):
             seq_in = torch.load(seq_in_cached, weights_only=True)
             seq_ref = torch.load(seq_ref_cached, weights_only=True)
         else:
-            # load all images in parallel
-            with multiprocessing.Manager() as manager:
-                manager_dict = manager.dict()
-                pool = multiprocessing.Pool()
+            parallel_load = True
+            if parallel_load:
+                # load all images in parallel
+                with multiprocessing.Manager() as manager:
+                    manager_dict = manager.dict()
+                    pool = multiprocessing.Pool()
 
-                all_images_paths = [
-                    sample_folder + bufname + str(i) + ".exr" 
-                    for bufname in ["color", "albedo", "normal", "reference"]
-                    for i in range(self.seq_len)
-                ]
+                    all_images_paths = [
+                        sample_folder + bufname + str(i) + ".exr" 
+                        for i in range(self.seq_len)
+                        for bufname in ["color", "albedo", "normal", "reference"]
+                    ]
 
+                    with multiprocessing.Pool(processes=len(all_images_paths)) as pool:
+                        for image_path in all_images_paths:
+                            pool.apply_async(load_exr_image, args=(image_path, manager_dict))
+                        pool.close()
+                        pool.join()
 
-                with multiprocessing.Pool(processes=len(all_images_paths)) as pool:
-                    for image_path in all_images_paths:
-                        pool.apply_async(load_exr_image, args=(image_path, manager_dict))
-                    pool.close()
-                    pool.join()
+                    seq_in_list = [
+                        manager_dict[bufname + str(i) + ".exr"].to(self.device)
+                        for i in range(self.seq_len)
+                        for bufname in ["color", "albedo", "normal"]
+                    ]
 
+                    seq_ref_list = [
+                        manager_dict[bufname + str(i) + ".exr"].to(self.device)
+                        for i in range(self.seq_len)
+                        for bufname in ["reference"]
+                    ]
+            else:
                 seq_in_list = [
-                    manager_dict[bufname + str(i) + ".exr"].to(self.device)
-                    for bufname in ["color", "albedo", "normal"]
+                    torch.tensor(exr.imread(sample_folder + bufname + str(i) + ".exr")).to(self.device)
                     for i in range(self.seq_len)
+                    for bufname in ["color", "albedo", "normal"]
                 ]
 
                 seq_ref_list = [
-                    manager_dict[bufname + str(i) + ".exr"].to(self.device)
-                    for bufname in ["reference"]
+                    torch.tensor(exr.imread(sample_folder + bufname + str(i) + ".exr")).to(self.device)
                     for i in range(self.seq_len)
+                    for bufname in ["reference"]
                 ]
 
             seq_in = torch.cat(seq_in_list, dim=2).permute(2, 0, 1)
