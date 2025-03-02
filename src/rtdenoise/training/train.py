@@ -12,7 +12,7 @@ def unsqueeze_inputs(data):
 
     return inputs, reference
 
-def train_model(training_dataset : DataLoader, test_dataset : DataLoader, model: BaseDenoiser, optimizer : torch.optim.Optimizer, scheduler, num_epochs):
+def train_model(training_dataset : DataLoader, eval_dataset : DataLoader, model: BaseDenoiser, optimizer : torch.optim.Optimizer, scheduler, num_epochs):
     # placeholder
     loss_fn = torch.nn.L1Loss()
     losses = []
@@ -45,16 +45,14 @@ def train_model(training_dataset : DataLoader, test_dataset : DataLoader, model:
             num_batches = 0
 
             model.eval()
-            for batch_idx, data in enumerate(test_dataset):
-                print(f"\tProcessing test batch {batch_idx}")
+            for batch_idx, data in enumerate(eval_dataset):
+                print(f"\tProcessing eval batch {batch_idx}")
 
                 seq_in, seq_ref = unsqueeze_inputs(data)
                 seq_out = model(seq_in)
 
                 loss = loss_fn(seq_out, seq_ref)
                 
-
-
                 # Update statistics
                 total_loss += loss.item()
                 num_batches += 1

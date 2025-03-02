@@ -7,9 +7,26 @@ import openexr_numpy as exr
 import os
 import multiprocessing
 import time
+import hashlib
+
+def get_cache_path(path):
+    cache_name = hashlib.sha256(path.encode('utf-8')).hexdigest()
+    cache_path = "/tmp/rtdenoise/cache/" + cache_name
+    return cache_path
 
 def load_exr_image(image_path, manager_dict):
-    image = torch.tensor(exr.imread(image_path))
+    # replace everything with alpha numeric 
+    cache_path = get_cache_path(image_path)
+    
+    per_image_caching = False
+    if os.path.exists(cache_path) and per_image_caching:
+        image = torch.load(cache_path, weights_only=True)
+    else:
+        image = torch.tensor(exr.imread(image_path))
+
+        if per_image_caching:
+            torch.save(image, cache_path)
+
     filename = os.path.basename(image_path)
     manager_dict[filename] = image
 
@@ -30,8 +47,8 @@ class FrameDataset(Dataset):
                     valid_sample = False
                     break
 
-                if valid_sample:
-                    self.samples.append(sample_folder)
+            if valid_sample:
+                self.samples.append(sample_folder)
 
         print(f"Dataset at {self.dataset_dir} has {len(self.samples)} samples")
 
@@ -53,39 +70,60 @@ class FrameDataset(Dataset):
 
         sample_folder = self.samples[idx]
 
+        cached_sample = get_cache_path(sample_folder)
+        seq_in_cached = cached_sample + "-seq-in.pt"
+        seq_ref_cached = cached_sample + "-seq-ref.pt"
 
-        # load all images in parallel
-        with multiprocessing.Manager() as manager:
-            manager_dict = manager.dict()
-            pool = multiprocessing.Pool()
+        load_start = time.time()
 
-            all_images_paths = [
-                sample_folder + bufname + str(i) + ".exr" 
-                for bufname in ["color", "albedo", "normal", "reference"]
-                for i in range(self.seq_len)
-            ]
+        per_seq_caching = True
+        if os.path.exists(seq_ref_cached) and per_seq_caching:
+            seq_in = torch.load(seq_in_cached, weights_only=True)
+            seq_ref = torch.load(seq_ref_cached, weights_only=True)
+        else:
+            # load all images in parallel
+            with multiprocessing.Manager() as manager:
+                manager_dict = manager.dict()
+                pool = multiprocessing.Pool()
 
-            with multiprocessing.Pool() as pool:
-                for image_path in all_images_paths:
-                    pool.apply_async(load_exr_image, args=(image_path, manager_dict))
-                pool.close()
-                pool.join()
-
-            seq_in_list = [
-                manager_dict[bufname + str(i) + ".exr"].to(self.device)
-                for bufname in ["color", "albedo", "normal"]
-                for i in range(self.seq_len)
-            ]
-
-            seq_ref_list = [
-                manager_dict[bufname + str(i) + ".exr"].to(self.device)
-                for bufname in ["reference"]
-                for i in range(self.seq_len)
-            ]
+                all_images_paths = [
+                    sample_folder + bufname + str(i) + ".exr" 
+                    for bufname in ["color", "albedo", "normal", "reference"]
+                    for i in range(self.seq_len)
+                ]
 
 
-        seq_in = torch.cat(seq_in_list, dim=2).permute(2, 0, 1)
-        seq_ref = torch.cat(seq_ref_list, dim=2).permute(2, 0, 1)
+                with multiprocessing.Pool(processes=len(all_images_paths)) as pool:
+                    for image_path in all_images_paths:
+                        pool.apply_async(load_exr_image, args=(image_path, manager_dict))
+                    pool.close()
+                    pool.join()
+
+                seq_in_list = [
+                    manager_dict[bufname + str(i) + ".exr"].to(self.device)
+                    for bufname in ["color", "albedo", "normal"]
+                    for i in range(self.seq_len)
+                ]
+
+                seq_ref_list = [
+                    manager_dict[bufname + str(i) + ".exr"].to(self.device)
+                    for bufname in ["reference"]
+                    for i in range(self.seq_len)
+                ]
+
+            seq_in = torch.cat(seq_in_list, dim=2).permute(2, 0, 1)
+            seq_ref = torch.cat(seq_ref_list, dim=2).permute(2, 0, 1)
+
+            if per_seq_caching:
+                torch.save(seq_in, seq_in_cached)
+                torch.save(seq_ref, seq_ref_cached)
+
+        
+        load_duration = time.time() - load_start
+
+        loading_diagnostics = False
+        if loading_diagnostics:
+            print(f"\t\tLoading item {idx}\ttook {load_duration}\tseconds")
 
         return seq_in, seq_ref
 
