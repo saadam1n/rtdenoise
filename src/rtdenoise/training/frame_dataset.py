@@ -1,43 +1,40 @@
 import torch
-import numpy as np
-import random
-import subprocess
 from torch.utils.data import Dataset
 
-# We need this so OpenCV imports exr files
-import os
-os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"
+import numpy as np
+import openexr_numpy as exr
 
-import cv2
+import os
 
 class FrameDataset(Dataset):
-    def __init__(self, base_dir, dataset_folder, device, seq_len):
-        self.dataset_dir = base_dir + "/" + dataset_folder
-        self.cache_dir = base_dir + "/CacheV2"
+    def __init__(self, dataset_folder, device, seq_len):
+        self.dataset_dir = dataset_folder + "/"
         self.seq_len=seq_len
 
-        self.num_frames=0
-        while True:
-            
-            if os.path.exists(self.dataset_dir + "/" + str(self.num_frames) + "-Reference.exr"):
-                self.num_frames+=1
-            else:
-                break
+        # keep all sequences with sequence length > self.sequence_length
+        self.samples = []
+        all_folders = os.listdir(dataset_folder)
+        for folder in all_folders:
+            sample_folder = self.dataset_dir + folder + "/"
 
-        print(f"Dataset at {self.dataset_dir} has {self.num_frames} images")
+            valid_sample = True
+            for i in range(self.seq_len):
+                if not os.path.exists(sample_folder + f"reference{i}.exr"):
+                    valid_sample = False
+                    break
+
+                if valid_sample:
+                    self.samples.append(sample_folder)
+
+        print(f"Dataset at {self.dataset_dir} has {len(self.samples)} samples")
 
         self.device=device
 
-        self.frame_cache = {}
-        self.ref_cache = {}
-        self.loaded = {}
-
-        self.patching = True
 
     def __len__(self):
         # length here is defined by the number of frame sequneces we have,
         # not the number of frames
-        return self.num_frames - self.seq_len + 1
+        return len(self.samples)
 
     # this needs to manually convert things to a tensor
     def __getitem__(self, idx):
@@ -47,86 +44,43 @@ class FrameDataset(Dataset):
         # N = number of frames
         # C = channels for each frame (color, albedo, world pos, world norm)
 
-        if True:
-            if True:
-                yoff = random.randint(0, 1080 - 512)
-                xoff = random.randint(0, 1920 - 512)
-            else:
-                yoff = int(random.gauss(450, 300))
-                xoff = int(random.gauss(450, 500))
+        sequence_inputs = []
+        sequence_refs = []
 
-                yoff = 0 if yoff < 0 else 719 if yoff >= 720 else yoff
-                xoff = 0 if xoff < 0 else 1279 if xoff >= 1280 else xoff
-
-        else:
-            if False:
-                yoff = 475
-                xoff = 420
-            else:
-                yoff = 0
-                xoff = 1280
-
-        frame_inputs = []
-        frame_references = []
+        sample_folder = self.samples[idx]
         for i in range(self.seq_len):
-            (frame_input, frame_reference) = self.read_frame(idx + i)
+            (frame_input, frame_reference) = self.read_frame(sample_folder, i)
 
-            if self.patching:
-                frame_input = frame_input[:, yoff:yoff+512, xoff:xoff+512]
-                frame_reference = frame_reference[:, yoff:yoff+512, xoff:xoff+512]
+            sequence_inputs += frame_input
+            sequence_refs += frame_reference
 
-            frame_inputs.append(frame_input)
-            frame_references.append(frame_reference)
-
-        input = torch.cat(tuple(frame_inputs), dim=0)
-        reference = torch.cat(tuple(frame_references), dim=0)
+        input = torch.cat(sequence_inputs, dim=0)
+        reference = torch.cat(sequence_refs, dim=0)
 
         return input, reference
 
-    def read_frame(self, i):
-        if i not in self.loaded:
-            self.loaded[i] = True
+    def read_frame(self, sample_folder, i):
+        color = self.read_exr(sample_folder, i, "color")
+        albedo = self.read_exr(sample_folder, i, "albedo")
 
-            color = self.read_exr(i, "Color")
-            albedo = self.read_exr(i, "Albedo")
+        # some stuff in the dataset is a bit broken, so here is a fix
+        color = torch.clamp_max(color, max=128.0)  
+        
+        # position is not in use currently
+        #pos = self.read_exr(sample_folder, i, "position")
+        norm = self.read_exr(sample_folder, i, "normal")
 
-            albedo[albedo < 0.001] = 1.0
-            color = color / albedo
+        ref = self.read_exr(sample_folder, i, "reference")
 
-            worldpos = self.read_exr(i, "WorldPosition") * 0.05
-            worldnorm = self.read_exr(i, "WorldNormal")
-
-            ref = self.read_exr(i, "Reference").permute(2, 0, 1)
-
-            frame_inputs = torch.cat((color, albedo, worldnorm, worldpos), dim=2).permute(2, 0, 1)
-
-            self.frame_cache[i] = frame_inputs
-            self.ref_cache[i] = ref
-
-            return (frame_inputs.to(self.device), ref.to(self.device))
-        else:
-            return (self.frame_cache[i].to(self.device), self.ref_cache[i].to(self.device))
+        return [color, albedo, norm], [ref]
 
 
-    def read_exr(self, idx, ext):
-        filename = str(idx) + "-" + ext + ".exr"
+    def read_exr(self, sample_folder, idx, bufname):
+        filename = sample_folder + bufname + str(idx) + ".exr"
 
-        cache_path = self.cache_dir + "/" + filename + ".npy"
+        img = exr.imread(filename)
+        img = torch.tensor(img, device=self.device).permute(2, 0, 1)
 
-        if os.path.exists(cache_path):
-            img = np.load(cache_path)
-        else:
-            img = cv2.imread(self.dataset_dir + "/" + filename, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH).astype(np.float32)
-            np.save(cache_path, img)
 
-        return torch.tensor(img, device="cpu", dtype=torch.float32)
-
-    def get_full_img(self):
-        self.patching = False
-        input, target = self.__getitem__(0)
-        self.patching = True
-        return input, target
-
-    def print_shape(name, img):
-        print(f"{name}\tshape is {img.shape}")
+        return img
 

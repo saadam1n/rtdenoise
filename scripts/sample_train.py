@@ -3,8 +3,8 @@ import rtdenoise
 import torch
 from torch.utils.data import DataLoader
 
-import cv2
 import time
+import openexr_numpy as exr
 
 if __name__ == "__main__":
     # this package is meant to be GPU-only, unless you are a crazy person
@@ -15,16 +15,24 @@ if __name__ == "__main__":
     else:
         raise RuntimeError("Unable to find suitable GPU for training!")
 
-    dataset = rtdenoise.FrameDataset("data/", "Dataset0", device, 1)
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
+    training_dataloader = DataLoader(
+        rtdenoise.FrameDataset("/home/saada/Datasets/mini_local_dataset/rt_train", device, 8),
+        batch_size=32, shuffle=True
+    )
+
+    test_dataloader = DataLoader(
+        rtdenoise.FrameDataset("/home/saada/Datasets/mini_local_dataset/rt_test", device, 8),
+        batch_size=16, shuffle=False
+    )
+
     model = rtdenoise.LaplacianPyramidUNet().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     scheduler  = torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.9)
 
-    model, losses = rtdenoise.train_model(dataloader, model=model, optimizer=optimizer, scheduler=scheduler, num_epochs=1)
+    model, losses = rtdenoise.train_model(training_dataloader, test_dataloader, model=model, optimizer=optimizer, scheduler=scheduler, num_epochs=1)
 
     print("Losses over time:")
-    f = open("results/latest-losses.csv", "w")
+    f = open("/tmp/latest-losses.csv", "w")
     f.write("Epoch, Loss\n")
     for i, loss in enumerate(losses):
         print(f"\tEpoch {i}:\t{loss}")
@@ -48,7 +56,7 @@ if __name__ == "__main__":
         image = image[0].squeeze().permute((1, 2, 0)).cpu().numpy()
         image = image[:, :, -3:]
 
-        cv2.imwrite("results/output.exr", image)
+        exr.imwrite("results/output.exr", image)
         f.write(f"-1, {loss.item()}")
 
     f.close()

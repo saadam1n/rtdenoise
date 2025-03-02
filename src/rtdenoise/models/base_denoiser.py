@@ -10,7 +10,7 @@ class BaseDenoiser(nn.Module):
         super().__init__()
 
         # ideally we want to fix the number of auxiliary features globally 
-        self.num_aux_channels = 9
+        self.num_aux_channels = 6
         self.num_input_channels = self.num_aux_channels + 3
 
         self.init_components()
