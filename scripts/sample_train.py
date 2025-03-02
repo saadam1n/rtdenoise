@@ -16,12 +16,12 @@ if __name__ == "__main__":
         raise RuntimeError("Unable to find suitable GPU for training!")
 
     training_dataloader = DataLoader(
-        rtdenoise.FrameDataset("/home/saada/Datasets/mini_local_dataset/rt_train", device, 8),
+        rtdenoise.FrameDataset(dataset_folder="/home/saada/Datasets/mini_local_dataset/rt_train", device=device, seq_len=8),
         batch_size=32, shuffle=True
     )
 
     test_dataloader = DataLoader(
-        rtdenoise.FrameDataset("/home/saada/Datasets/mini_local_dataset/rt_test", device, 8),
+        rtdenoise.FrameDataset(dataset_folder="/home/saada/Datasets/mini_local_dataset/rt_test", device=device, seq_len=8),
         batch_size=16, shuffle=False
     )
 

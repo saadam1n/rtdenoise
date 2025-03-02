@@ -5,6 +5,13 @@ import numpy as np
 import openexr_numpy as exr
 
 import os
+import multiprocessing
+import time
+
+def load_exr_image(image_path, manager_dict):
+    image = torch.tensor(exr.imread(image_path))
+    filename = os.path.basename(image_path)
+    manager_dict[filename] = image
 
 class FrameDataset(Dataset):
     def __init__(self, dataset_folder, device, seq_len):
@@ -42,45 +49,45 @@ class FrameDataset(Dataset):
         # (B, N, C, H, W)
         # B = batch size
         # N = number of frames
-        # C = channels for each frame (color, albedo, world pos, world norm)
-
-        sequence_inputs = []
-        sequence_refs = []
+        # C = channels for each frame (color, albedo, world norm)
 
         sample_folder = self.samples[idx]
-        for i in range(self.seq_len):
-            (frame_input, frame_reference) = self.read_frame(sample_folder, i)
-
-            sequence_inputs += frame_input
-            sequence_refs += frame_reference
-
-        input = torch.cat(sequence_inputs, dim=0)
-        reference = torch.cat(sequence_refs, dim=0)
-
-        return input, reference
-
-    def read_frame(self, sample_folder, i):
-        color = self.read_exr(sample_folder, i, "color")
-        albedo = self.read_exr(sample_folder, i, "albedo")
-
-        # some stuff in the dataset is a bit broken, so here is a fix
-        color = torch.clamp_max(color, max=128.0)  
-        
-        # position is not in use currently
-        #pos = self.read_exr(sample_folder, i, "position")
-        norm = self.read_exr(sample_folder, i, "normal")
-
-        ref = self.read_exr(sample_folder, i, "reference")
-
-        return [color, albedo, norm], [ref]
 
 
-    def read_exr(self, sample_folder, idx, bufname):
-        filename = sample_folder + bufname + str(idx) + ".exr"
+        # load all images in parallel
+        with multiprocessing.Manager() as manager:
+            manager_dict = manager.dict()
+            pool = multiprocessing.Pool()
 
-        img = exr.imread(filename)
-        img = torch.tensor(img, device=self.device).permute(2, 0, 1)
+            all_images_paths = [
+                sample_folder + bufname + str(i) + ".exr" 
+                for bufname in ["color", "albedo", "normal", "reference"]
+                for i in range(self.seq_len)
+            ]
+
+            with multiprocessing.Pool() as pool:
+                for image_path in all_images_paths:
+                    pool.apply_async(load_exr_image, args=(image_path, manager_dict))
+                pool.close()
+                pool.join()
+
+            seq_in_list = [
+                manager_dict[bufname + str(i) + ".exr"].to(self.device)
+                for bufname in ["color", "albedo", "normal"]
+                for i in range(self.seq_len)
+            ]
+
+            seq_ref_list = [
+                manager_dict[bufname + str(i) + ".exr"].to(self.device)
+                for bufname in ["reference"]
+                for i in range(self.seq_len)
+            ]
 
 
-        return img
+        seq_in = torch.cat(seq_in_list, dim=2).permute(2, 0, 1)
+        seq_ref = torch.cat(seq_ref_list, dim=2).permute(2, 0, 1)
+
+        return seq_in, seq_ref
+
+
 
