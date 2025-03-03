@@ -10,7 +10,7 @@ class BaseDenoiser(nn.Module):
         super().__init__()
 
         # ideally we want to fix the number of auxiliary features globally 
-        self.num_aux_channels = 6
+        self.num_aux_channels = 8
         self.num_input_channels = self.num_aux_channels + 3
 
         self.init_components()
@@ -23,6 +23,8 @@ class BaseDenoiser(nn.Module):
         num_frames = input.size(1) // self.num_input_channels
         H = input.size(2)
         W = input.size(3)
+
+        print(f"Num frames is {num_frames}")
 
         output = torch.empty(B, 3 * num_frames, H, W, device=input.device)
         temporal_state = None

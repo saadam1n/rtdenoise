@@ -91,7 +91,7 @@ class FrameDataset(Dataset):
                     all_images_paths = [
                         sample_folder + bufname + str(i) + ".exr" 
                         for i in range(self.seq_len)
-                        for bufname in ["color", "albedo", "normal", "reference"]
+                        for bufname in ["color", "albedo", "normal", "motionvec", "reference"]
                     ]
 
                     with multiprocessing.Pool(processes=len(all_images_paths)) as pool:
@@ -103,7 +103,7 @@ class FrameDataset(Dataset):
                     seq_in_list = [
                         manager_dict[bufname + str(i) + ".exr"].to(self.device)
                         for i in range(self.seq_len)
-                        for bufname in ["color", "albedo", "normal"]
+                        for bufname in ["color", "albedo", "normal", "motionvec"]
                     ]
 
                     seq_ref_list = [
@@ -115,7 +115,7 @@ class FrameDataset(Dataset):
                 seq_in_list = [
                     torch.tensor(exr.imread(sample_folder + bufname + str(i) + ".exr")).to(self.device)
                     for i in range(self.seq_len)
-                    for bufname in ["color", "albedo", "normal"]
+                    for bufname in ["color", "albedo", "normal", "motionvec"]
                 ]
 
                 seq_ref_list = [

@@ -28,12 +28,12 @@ if __name__ == "__main__":
 
     training_dataloader = DataLoader(
         rtdenoise.FrameDataset(dataset_folder="/home/saada/Datasets/mini_local_dataset/rt_train", device=device, seq_len=8),
-        batch_size=32, shuffle=True
+        batch_size=1, shuffle=True
     )
 
     eval_dataloader = DataLoader(
         rtdenoise.FrameDataset(dataset_folder="/home/saada/Datasets/mini_local_dataset/rt_test", device=device, seq_len=8),
-        batch_size=16, shuffle=False
+        batch_size=32, shuffle=False
     )
 
     test_dataloader = DataLoader(
