@@ -10,135 +10,93 @@ import torch.utils.checkpoint as checkpoint
 from .base_denoiser import BaseDenoiser
 from .components import *
 
-def simple_warp(image, motionvec):
-    with torch.no_grad():
-        i = torch.arange(image.shape[2], device=image.device)
-        j = torch.arange(image.shape[3], device=image.device)
+"""
+Architecture of the encoder block:
+- Hadamard product of 3x3 depth conv and 1x1 conv
+- Skip connection (add)
+- Channel MLP w/ skip connection
 
-        ii, jj = torch.meshgrid((i, j), indexing="ij")
+What should we name this block? Well, what does this block do? 
+According to our theory, it takes prior information, information of nearby pixels, 
+and then updates that information. It creates a clearer picture of the local context.
+"""
 
-        ii = torch.clamp(ii + motionvec[:, 1:, :, :], min=0, max=image.shape[2] - 1).to(torch.int32).view(-1, image.shape[2], image.shape[3])
-        jj = torch.clamp(jj + motionvec[:, :1, :, :], min=0, max=image.shape[3] - 1).to(torch.int32).view(-1, image.shape[2], image.shape[3])
-        batch_idx = torch.arange(image.shape[0], device=image.device).view(-1, 1, 1).expand_as(ii)
-
-    warped = image[batch_idx, :, ii, jj].permute(0, 3, 1, 2)
-    
-    return warped
-
-
-# includes the encoder and decoder for a particular U-Net layer
-class UNetStackableLayer(nn.Module):
-    # bottleneck doesn't have to be a bottleneck; it could actually be another stackable layer
-    def __init__(self, channels_in, channels_out, bottleneck):
-        super(UNetStackableLayer, self).__init__()
-
-        self.bottleneck = bottleneck
-
-        self.encoder = KernelMatchingFormer(channels_in, channels_out) 
-        self.decoder = KernelMatchingFormer(channels_out * 2, channels_in) 
-
-        self.kernel_alpha_predictor = ChannelMlp(channels_in, 11, 2)
-
-        self.per_pixel_conv = PerPixelConv(3)
-
-        self.prev_filtered = None
-
-    def forward(self, input, radiance, temporal_state, motionvec):
-        upscale_size = (input.size(2), input.size(3))
-
-        enc = checkpoint.checkpoint(self.encoder, input, use_reentrant=False)
-
-        binput = F.max_pool2d(enc, kernel_size=2, stride=2)
-        bradiance = F.avg_pool2d(radiance, kernel_size=2, stride=2)
-        bmotionvec = F.avg_pool2d(motionvec, kernel_size=2, stride=2)
-
-        bdec, bfiltered = checkpoint.checkpoint(self.bottleneck, binput, bradiance, temporal_state, bmotionvec, use_reentrant=False)
-
-        bdec = F.interpolate(bdec, size=upscale_size, mode="bilinear", align_corners=True)
-
-        bfiltered = F.interpolate(bfiltered, size=upscale_size, mode="bilinear", align_corners=True)
-
-        dinput = torch.cat((enc, bdec), dim=1)
-
-        dec = checkpoint.checkpoint(self.decoder, dinput, use_reentrant=False)
-
-        # get kernel and alpha
-        kernel_alpha = self.kernel_alpha_predictor(dec)
-        kernel = F.softmax(kernel_alpha[:, :9, :, :], dim=1)
-        alpha = F.sigmoid(kernel_alpha[:, 9:, :, :])
-
-        laplacian_alpha = alpha[:, :1, :, :]
-        temporal_alpha = alpha[:, 1:, :, :]
-
-        prev_filtered = simple_warp(self.prev_filtered, motionvec) if self.prev_filtered is not None else torch.zeros_like(radiance)
-
-        filtered = self.per_pixel_conv(radiance, kernel) * (1.0 - temporal_alpha) + prev_filtered * temporal_alpha
-
-        # combine via a laplacian pyramid
-        low_freq = F.interpolate(F.avg_pool2d(filtered, kernel_size=2, stride=2), size=upscale_size, mode="bilinear", align_corners=True)
-        filtered = filtered - laplacian_alpha * low_freq + laplacian_alpha * bfiltered
-
-        self.prev_filtered = filtered
-
-        return (dec, filtered)
-    
-    def clear_memory(self):
-        self.prev_filtered = None
-        self.bottleneck.clear_memory()
-
-class UNetBottleneck(nn.Module):
+class LPUBlock(nn.Module):
+    """Building block for the LPU"""
     def __init__(self, channels_in, channels_out):
-        super(UNetBottleneck, self).__init__()
+        super(LPUBlock, self).__init__()
 
-        # use two cuz why not
-        self.bottleneck = nn.Sequential(
-            KernelMatchingFormer(channels_in, channels_in),
-            KernelMatchingFormer(channels_in, channels_out),
-        )
-        self.per_pixel_conv = PerPixelConv(3)
+        self.batch_norm = nn.BatchNorm2d(channels_in)
+        self.dw_conv = nn.Conv2d(channels_in, channels_in, kernel_size=3, padding=1, groups=channels_in)
+        self.pw_conv = nn.Conv2d(channels_in, channels_in, kernel_size=1)
+        self.channel_mlp = ChannelMlp(channels_in, channels_out, channel_multiplier=2)
 
-        self.kernel_predictor = ChannelMlp(channels_out, 10, 2)
+        self.skip_transform = nn.Sequential(
+            nn.BatchNorm2d(channels_in),
+            nn.Conv2d(channels_in, channels_out, kernel_size=1)
+        ) if channels_in != channels_out else None
 
-        self.prev_filtered = None
+    def forward(self, x):
 
-    def forward(self, input, radiance, temporal_state, motionvec):
-        conv = self.bottleneck(input)
+        x_norm = self.batch_norm(x)
+        x_updated = self.dw_conv(x_norm) + x 
 
-        kernel_alpha = self.kernel_predictor(conv)
-        kernel = F.softmax(kernel_alpha[:, :9, :, :], dim=1)
-        temporal_alpha = F.sigmoid(kernel_alpha[:, 9:, :, :])
+        x_mlp = self.channel_mlp(x_updated) + (self.skip_transform(x_updated) if self.skip_transform is not None else x_updated)
 
-        prev_filtered = simple_warp(self.prev_filtered, motionvec) if self.prev_filtered is not None else torch.zeros_like(radiance)
-        filtered = self.per_pixel_conv(radiance, kernel) * (1.0 - temporal_alpha) + prev_filtered * temporal_alpha
+        return x_mlp
 
-        self.prev_filtered = filtered
 
-        return (conv, filtered)
+
+class LPULevel(nn.Module):
+    """A resolution level of a LPU Net. is_bottleneck changes input and output behavior"""
+    def __init__(self, channels_in, channels_out, is_bottleneck):
+        super(LPULevel, self).__init__()
+
+        self.encoder = LPUBlock(channels_in, channels_out)
+        self.decoder = LPUBlock(channels_out if is_bottleneck else 2 * channels_out, channels_in)
+
+        self.kernel_alpha_predictor = ChannelMlp(channels_in, 9 if is_bottleneck else 10, channel_multiplier=2)
+
+    def encode(self, x):
+        return self.encoder(x)
     
+    def decode(self, x):
+        dec = self.decoder(x)
+        kernel_alpha = self.kernel_alpha_predictor(dec)
+
+        # expect user to apply kernel prediction externally
+        return dec, kernel_alpha
+
     def clear_memory(self):
-        self.prev_filtered = None
-    
+        pass
 
 class LaplacianPyramidUNet(BaseDenoiser):
     def init_components(self):
         self.num_internal_channels = 32
 
-        self.true_num_input_channels = (self.num_input_channels - 2) * 2
+        # concate previous frame input and ignore motion vectors
+        self.true_num_input_channels = (self.num_input_channels - 2) * 1
         self.projector = nn.Sequential(
             nn.BatchNorm2d(self.true_num_input_channels),
             nn.Conv2d(self.true_num_input_channels, self.num_internal_channels, kernel_size=1)
         )
 
-        self.unet5 = UNetBottleneck(128, 128)
-        self.unet4 = UNetStackableLayer(96, 128, self.unet5)
-        self.unet3 = UNetStackableLayer(64, 96, self.unet4)
-        self.unet2 = UNetStackableLayer(64, 64, self.unet3)
-        self.unet1 = UNetStackableLayer(32, 64, self.unet2)
-        self.unet0 = UNetStackableLayer(32, 32, self.unet1)
+        self.levels = nn.ModuleList([
+            LPULevel(32, 32, False),
+            LPULevel(32, 64, False),
+            LPULevel(64, 64, False),
+            LPULevel(64, 96, False),
+            LPULevel(96, 128, False),
+            LPULevel(128, 128, True)
+        ])
 
-        self.prev_frame_input = None
+        self.per_pixel_conv = PerPixelConv(3)
 
     def run_frame(self, frame_input, temporal_state):
+        if temporal_state is None:
+            self.clear_memory()
+            temporal_state = True # placeholder value
+
         B = frame_input.size(0)
         H = frame_input.size(2)
         W = frame_input.size(3)
@@ -150,19 +108,58 @@ class LaplacianPyramidUNet(BaseDenoiser):
         trunc_input = frame_input[:, :9, :, :]
         motionvec = frame_input[:, 9:, :, :]
     
-        prev_frame_input = self.prev_frame_input if temporal_state is not None else torch.zeros_like(trunc_input)
-
         # transform features
-        combined_temporal_input = torch.cat((trunc_input, prev_frame_input), dim=1)
+        combined_temporal_input = trunc_input 
         proj_input = self.projector(combined_temporal_input)
 
-        ignore, filtered = self.unet0(proj_input, color, temporal_state, motionvec)
+        
+        # encoder pass 
+        downsampled_color = []
+        skip_tensors = []
+        for i, level in enumerate(self.levels):
+            downsampled_color.append(
+                color if i == 0 else F.avg_pool2d(downsampled_color[i - 1], kernel_size=2, stride=2)
+            )
+
+            skip_tensors.append(
+                checkpoint.checkpoint(
+                    level.encode,
+                    proj_input if i == 0 else F.max_pool2d(skip_tensors[i - 1], kernel_size=2, stride=2),
+                    use_reentrant=False
+                )
+            )
+
+        # decoder pass
+        for i, level in reversed(list(enumerate(self.levels))):
+            upsample_shape = (skip_tensors[i].shape[2], skip_tensors[i].shape[3])
+
+            # input: upsampled decoder output + block 
+            # calculate kernel and temporal alpha (and possible compositing alpha)
+            dec, kernel_alpha = checkpoint.checkpoint(
+                level.decode,
+                skip_tensors[i] if i == len(self.levels) - 1 else torch.cat((skip_tensors[i], F.interpolate(dec, size=upsample_shape)), dim=1),
+                use_reentrant=False
+            )
+
+            kernel = F.softmax(kernel_alpha[:, :9, :, :] / 3.0, dim=1)
+
+            current_filtered = self.per_pixel_conv(downsampled_color[i], kernel)
+
+            if i == len(self.levels) - 1:
+                filtered = current_filtered
+            else:
+                alpha_components = F.sigmoid(kernel_alpha[:, 9:, :, :])
+
+                composite_alpha = alpha_components
+
+                freq_replacement = F.interpolate(filtered - F.avg_pool2d(current_filtered, kernel_size=2, stride=2), size=upsample_shape)
+                filtered = current_filtered + composite_alpha * freq_replacement
+
 
         # finalize output
         denoised_output = albedo * filtered
-        self.prev_frame_input = torch.cat((denoised_output, frame_input[:, 3:9, :, :]), dim=1)
-
-        # value doesn't matter, this is more of a marker
-        temporal_state = self.prev_frame_input
 
         return (denoised_output, temporal_state)
+    
+    def clear_memory(self):
+        pass

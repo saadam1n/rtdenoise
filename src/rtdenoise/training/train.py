@@ -21,6 +21,8 @@ def train_model(training_dataset : DataLoader, eval_dataset : DataLoader, model:
         print(f"Processing epoch {epoch}")
 
         # Training code
+        total_loss = 0.0
+        num_batches = 0
 
         model.train()
         for batch_idx, data in enumerate(training_dataset):
@@ -36,6 +38,11 @@ def train_model(training_dataset : DataLoader, eval_dataset : DataLoader, model:
             loss.backward()
 
             optimizer.step()
+
+            total_loss += loss.item() *  seq_ref.shape[0]
+            num_batches  += seq_ref.shape[0]
+
+        epoch_training_loss = total_loss / num_batches
 
         scheduler.step()
 
@@ -54,11 +61,11 @@ def train_model(training_dataset : DataLoader, eval_dataset : DataLoader, model:
                 loss = loss_fn(seq_out, seq_ref)
                 
                 # Update statistics
-                total_loss += loss.item()
-                num_batches += 1
+                total_loss += loss.item() *  seq_ref.shape[0]
+                num_batches += seq_ref.shape[0]
 
             epoch_loss = total_loss / num_batches
-            print(f"Loss in epoch {epoch} was {epoch_loss}\n\n")
+            print(f"Training and epoch loss in epoch {epoch} was {epoch_training_loss}\t{epoch_loss}\n\n")
 
             losses.append(epoch_loss)
 

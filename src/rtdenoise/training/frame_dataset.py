@@ -41,6 +41,9 @@ class FrameDataset(Dataset):
         for folder in all_folders:
             sample_folder = self.dataset_dir + folder + "/"
 
+            if folder.find("Converted") != -1:
+                continue
+
             valid_sample = True
             for i in range(self.seq_len):
                 if not os.path.exists(sample_folder + f"reference{i}.exr"):

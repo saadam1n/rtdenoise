@@ -24,8 +24,6 @@ class BaseDenoiser(nn.Module):
         H = input.size(2)
         W = input.size(3)
 
-        print(f"Num frames is {num_frames}")
-
         output = torch.empty(B, 3 * num_frames, H, W, device=input.device)
         temporal_state = None
 

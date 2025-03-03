@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
     training_dataloader = DataLoader(
         rtdenoise.FrameDataset(dataset_folder="/home/saada/Datasets/mini_local_dataset/rt_train", device=device, seq_len=8),
-        batch_size=1, shuffle=True
+        batch_size=32, shuffle=True
     )
 
     eval_dataloader = DataLoader(
@@ -42,10 +42,10 @@ if __name__ == "__main__":
     )
 
     model = rtdenoise.LaplacianPyramidUNet().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    scheduler  = torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.9)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    scheduler  = torch.optim.lr_scheduler.StepLR(optimizer, step_size=32, gamma=0.9)
 
-    model, losses = rtdenoise.train_model(training_dataloader, eval_dataloader, model=model, optimizer=optimizer, scheduler=scheduler, num_epochs=1)
+    model, losses = rtdenoise.train_model(training_dataloader, eval_dataloader, model=model, optimizer=optimizer, scheduler=scheduler, num_epochs=512)
 
     print("Losses over time:")
     f = open("/tmp/latest-losses.csv", "w")
