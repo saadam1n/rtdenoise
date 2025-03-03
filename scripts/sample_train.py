@@ -27,17 +27,17 @@ if __name__ == "__main__":
         raise RuntimeError("Unable to find suitable GPU for training!")
 
     training_dataloader = DataLoader(
-        rtdenoise.FrameDataset(dataset_folder="/home/saada/Datasets/mini_local_dataset/rt_train", device=device, seq_len=8),
-        batch_size=32, shuffle=True
+        rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/rt_train", device=device, seq_len=8),
+        batch_size=64, shuffle=True
     )
 
     eval_dataloader = DataLoader(
-        rtdenoise.FrameDataset(dataset_folder="/home/saada/Datasets/mini_local_dataset/rt_test", device=device, seq_len=8),
+        rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/rt_test", device=device, seq_len=8),
         batch_size=32, shuffle=False
     )
 
     test_dataloader = DataLoader(
-        rtdenoise.FrameDataset(dataset_folder="/home/saada/Datasets/mini_local_dataset/test_fullres_dir", device=device, seq_len=8),
+        rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/test_fullres_dir", device=device, seq_len=8),
         batch_size=1, shuffle=False
     )
 
@@ -48,11 +48,13 @@ if __name__ == "__main__":
     model, losses = rtdenoise.train_model(training_dataloader, eval_dataloader, model=model, optimizer=optimizer, scheduler=scheduler, num_epochs=512)
 
     print("Losses over time:")
-    f = open("/tmp/latest-losses.csv", "w")
-    f.write("Epoch, Loss\n")
+    f = open(f"{os.environ['RTDENOISE_OUTPUT_PATH']}/latest-losses.csv", "w")
+    f.write("Epoch, Training Loss, Eval Loss\n")
     for i, loss in enumerate(losses):
-        print(f"\tEpoch {i}:\t{loss}")
-        f.write(f"{i}, {loss}\n")
+        train, eval = loss
+
+        print(f"\tEpoch {i}:\t{train}\t{eval}")
+        f.write(f"{i}, {train}, {eval}\n")
 
     # show results on full image
     with torch.no_grad():
@@ -70,7 +72,7 @@ if __name__ == "__main__":
             
             print(f"\tTotal loss on test sequence {seq_idx} was {loss.item()}\n\n")
 
-            dump_path = f"/tmp/rtdenoise/test/seq{seq_idx}/"
+            dump_path = f"{os.environ['RTDENOISE_OUTPUT_PATH']}/test/seq{seq_idx}/"
             os.makedirs(dump_path, exist_ok=True)
 
             with open(dump_path + "loss.csv", "w") as f:
@@ -87,7 +89,7 @@ if __name__ == "__main__":
 
             
 
-
+    print("Done!")
     while True:
         time.sleep(1.0)
     

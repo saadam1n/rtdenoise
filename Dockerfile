@@ -5,6 +5,4 @@ WORKDIR /docker
 COPY . .
 
 RUN pip install . -v
-
-CMD ["python3", "-u", "scripts/sample_train.py"]
  

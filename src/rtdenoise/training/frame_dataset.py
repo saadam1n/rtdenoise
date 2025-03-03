@@ -11,7 +11,7 @@ import hashlib
 
 def get_cache_path(path):
     cache_name = hashlib.sha256(path.encode('utf-8')).hexdigest()
-    cache_path = "/tmp/rtdenoise/cache/" + cache_name
+    cache_path = f"{os.environ['RTDENOISE_OUTPUT_PATH']}/cache/" + cache_name
     return cache_path
 
 def load_exr_image(image_path, manager_dict):

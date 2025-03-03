@@ -67,7 +67,7 @@ def train_model(training_dataset : DataLoader, eval_dataset : DataLoader, model:
             epoch_loss = total_loss / num_batches
             print(f"Training and epoch loss in epoch {epoch} was {epoch_training_loss}\t{epoch_loss}\n\n")
 
-            losses.append(epoch_loss)
+            losses.append((epoch_training_loss, epoch_loss))
 
     return (model, losses)
             
