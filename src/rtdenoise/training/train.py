@@ -12,7 +12,7 @@ def unsqueeze_inputs(data):
 
     return inputs, reference
 
-def train_model(training_dataset : DataLoader, eval_dataset : DataLoader, model: BaseDenoiser, optimizer : torch.optim.Optimizer, scheduler, num_epochs):
+def train_model(training_dataset : DataLoader, eval_dataset : DataLoader, model: BaseDenoiser, optimizer : torch.optim.Optimizer, scheduler, num_epochs, device):
     # placeholder
     loss_fn = torch.nn.L1Loss()
     losses = []
@@ -29,6 +29,8 @@ def train_model(training_dataset : DataLoader, eval_dataset : DataLoader, model:
             print(f"\tProcessing training batch {batch_idx}")
 
             seq_in, seq_ref = unsqueeze_inputs(data)
+            seq_in = seq_in.to(device)
+            seq_ref = seq_ref.to(device)
 
             optimizer.zero_grad()
 
@@ -56,6 +58,9 @@ def train_model(training_dataset : DataLoader, eval_dataset : DataLoader, model:
                 print(f"\tProcessing eval batch {batch_idx}")
 
                 seq_in, seq_ref = unsqueeze_inputs(data)
+                seq_in = seq_in.to(device)
+                seq_ref = seq_ref.to(device)
+
                 seq_out = model(seq_in)
 
                 loss = loss_fn(seq_out, seq_ref)

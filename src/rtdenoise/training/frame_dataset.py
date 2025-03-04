@@ -9,6 +9,23 @@ import multiprocessing
 import time
 import hashlib
 
+def validate_sample(args):
+    dataset_dir, folder, seq_len = args
+
+    sample_folder = dataset_dir + folder + "/"
+
+    if folder.find("Converted") != -1:
+        return None
+
+    valid_sample = True
+    for i in range(seq_len):
+        if not os.path.exists(sample_folder + f"reference{i}.exr"):
+            valid_sample = False
+            break
+
+    return sample_folder if valid_sample is True else None
+        
+
 def get_cache_path(path):
     cache_name = hashlib.sha256(path.encode('utf-8')).hexdigest()
     cache_path = f"{os.environ['RTDENOISE_OUTPUT_PATH']}/cache/" + cache_name
@@ -36,22 +53,25 @@ class FrameDataset(Dataset):
         self.seq_len=seq_len
 
         # keep all sequences with sequence length > self.sequence_length
-        self.samples = []
+
+        list_start = time.time()
         all_folders = os.listdir(dataset_folder)
-        for folder in all_folders:
-            sample_folder = self.dataset_dir + folder + "/"
+        list_end = time.time()
+        print(f"Listing all samples took {list_end - list_start} seconds.")
 
-            if folder.find("Converted") != -1:
-                continue
+        self.samples = []
+        pool_args = [(self.dataset_dir, folder, self.seq_len) for folder in all_folders]
 
-            valid_sample = True
-            for i in range(self.seq_len):
-                if not os.path.exists(sample_folder + f"reference{i}.exr"):
-                    valid_sample = False
-                    break
-
-            if valid_sample:
-                self.samples.append(sample_folder)
+        validate_start = time.time()
+        if False:
+            with multiprocessing.Pool(processes=len(all_folders) // 256) as pool:
+                results = pool.map(validate_sample, pool_args)
+        else:
+            results = [validate_sample(args) for args in pool_args]
+        self.samples = [res for res in results if res is not None]
+        validate_end = time.time()
+        print(f"Validating all samples took {validate_end - validate_start} seconds.")
+        
 
         print(f"Dataset at {self.dataset_dir} has {len(self.samples)} samples")
 
@@ -65,6 +85,7 @@ class FrameDataset(Dataset):
 
     # this needs to manually convert things to a tensor
     def __getitem__(self, idx):
+        print(f"\t\tFetching item {idx}")
         # basically, I want to output it in this format for each element of each batch
         # (B, N, C, H, W)
         # B = batch size
@@ -84,7 +105,7 @@ class FrameDataset(Dataset):
             seq_in = torch.load(seq_in_cached, weights_only=True)
             seq_ref = torch.load(seq_ref_cached, weights_only=True)
         else:
-            parallel_load = True
+            parallel_load = False
             if parallel_load:
                 # load all images in parallel
                 with multiprocessing.Manager() as manager:
@@ -116,13 +137,13 @@ class FrameDataset(Dataset):
                     ]
             else:
                 seq_in_list = [
-                    torch.tensor(exr.imread(sample_folder + bufname + str(i) + ".exr")).to(self.device)
+                    torch.tensor(exr.imread(sample_folder + bufname + str(i) + ".exr"))
                     for i in range(self.seq_len)
                     for bufname in ["color", "albedo", "normal", "motionvec"]
                 ]
 
                 seq_ref_list = [
-                    torch.tensor(exr.imread(sample_folder + bufname + str(i) + ".exr")).to(self.device)
+                    torch.tensor(exr.imread(sample_folder + bufname + str(i) + ".exr"))
                     for i in range(self.seq_len)
                     for bufname in ["reference"]
                 ]

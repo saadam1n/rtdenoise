@@ -27,25 +27,25 @@ if __name__ == "__main__":
         raise RuntimeError("Unable to find suitable GPU for training!")
 
     training_dataloader = DataLoader(
-        rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/rt_train", device=device, seq_len=8),
-        batch_size=48, shuffle=True
+        rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/rt_train", device="cpu", seq_len=8),
+        batch_size=12, shuffle=True, num_workers=32, prefetch_factor=1
     )
 
     eval_dataloader = DataLoader(
-        rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/rt_test", device=device, seq_len=8),
-        batch_size=32, shuffle=False
+        rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/rt_test", device="cpu", seq_len=8),
+        batch_size=12, shuffle=False, num_workers=16, prefetch_factor=1
     )
 
     test_dataloader = DataLoader(
-        rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/test_fullres_dir", device=device, seq_len=8),
-        batch_size=1, shuffle=False
+        rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/test_fullres_dir", device="cpu", seq_len=8),
+        batch_size=1, shuffle=False, num_workers=8, prefetch_factor=1
     )
 
-    model = rtdenoise.LaplacianPyramidUNet().to(device)
+    model = torch.nn.DataParallel(rtdenoise.LaplacianPyramidUNet().to(device))
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
     scheduler  = torch.optim.lr_scheduler.StepLR(optimizer, step_size=32, gamma=0.9)
 
-    model, losses = rtdenoise.train_model(training_dataloader, eval_dataloader, model=model, optimizer=optimizer, scheduler=scheduler, num_epochs=512)
+    model, losses = rtdenoise.train_model(training_dataloader, eval_dataloader, model=model, optimizer=optimizer, scheduler=scheduler, num_epochs=512, device=device)
 
     print("Losses over time:")
     f = open(f"{os.environ['RTDENOISE_OUTPUT_PATH']}/latest-losses.csv", "w")
@@ -66,6 +66,10 @@ if __name__ == "__main__":
             print(f"Processing test sequence {seq_idx}")
 
             seq_in, seq_ref = unsqueeze_inputs(data)
+
+            seq_in = seq_in.to(device)
+            seq_ref = seq_ref.to(device)
+
             seq_out = model(seq_in)
 
             loss = loss_fn(seq_out, seq_ref)
