@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
     training_dataloader = DataLoader(
         rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/rt_train", device=device, seq_len=8),
-        batch_size=64, shuffle=True
+        batch_size=48, shuffle=True
     )
 
     eval_dataloader = DataLoader(
