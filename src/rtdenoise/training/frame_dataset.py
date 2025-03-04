@@ -8,23 +8,8 @@ import os
 import multiprocessing
 import time
 import hashlib
-
-def validate_sample(args):
-    dataset_dir, folder, seq_len = args
-
-    sample_folder = dataset_dir + folder + "/"
-
-    if folder.find("Converted") != -1:
-        return None
-
-    valid_sample = True
-    for i in range(seq_len):
-        if not os.path.exists(sample_folder + f"reference{i}.exr"):
-            valid_sample = False
-            break
-
-    return sample_folder if valid_sample is True else None
-        
+import shutil
+import tarfile
 
 def get_cache_path(path):
     cache_name = hashlib.sha256(path.encode('utf-8')).hexdigest()
@@ -52,27 +37,9 @@ class FrameDataset(Dataset):
         self.dataset_dir = dataset_folder + "/"
         self.seq_len=seq_len
 
-        # keep all sequences with sequence length > self.sequence_length
-
-        list_start = time.time()
-        all_folders = os.listdir(dataset_folder)
-        list_end = time.time()
-        print(f"Listing all samples took {list_end - list_start} seconds.")
-
-        self.samples = []
-        pool_args = [(self.dataset_dir, folder, self.seq_len) for folder in all_folders]
-
-        validate_start = time.time()
-        if False:
-            with multiprocessing.Pool(processes=len(all_folders) // 256) as pool:
-                results = pool.map(validate_sample, pool_args)
-        else:
-            results = [validate_sample(args) for args in pool_args]
-        self.samples = [res for res in results if res is not None]
-        validate_end = time.time()
-        print(f"Validating all samples took {validate_end - validate_start} seconds.")
+        all_tarballs = os.listdir(dataset_folder)
+        self.samples = [self.dataset_dir + tarball for tarball in all_tarballs]
         
-
         print(f"Dataset at {self.dataset_dir} has {len(self.samples)} samples")
 
         self.device=device
@@ -85,14 +52,13 @@ class FrameDataset(Dataset):
 
     # this needs to manually convert things to a tensor
     def __getitem__(self, idx):
-        print(f"\t\tFetching item {idx}")
         # basically, I want to output it in this format for each element of each batch
         # (B, N, C, H, W)
         # B = batch size
         # N = number of frames
         # C = channels for each frame (color, albedo, world norm)
 
-        sample_folder = self.samples[idx]
+        sample_folder = self.fetch_sample_folder(idx)
 
         cached_sample = get_cache_path(sample_folder)
         seq_in_cached = cached_sample + "-seq-in.pt"
@@ -162,7 +128,31 @@ class FrameDataset(Dataset):
         if loading_diagnostics:
             print(f"\t\tLoading item {idx}\ttook {load_duration}\tseconds")
 
+        self.cleanup_sample_folder(idx)
+
         return seq_in, seq_ref
+
+    def fetch_sample_folder(self, idx):
+        tarball_path = self.samples[idx]
+        local_path = self.get_path_local_path(tarball_path)
+        os.makedirs(local_path)
+
+
+        local_file = local_path + ".tgz"
+        shutil.copyfile(tarball_path, local_file)
+        with tarfile.open(local_file, "r:gz") as tar:
+            tar.extractall(path=local_path)
+        os.remove(local_file)
+
+        return local_path
+
+    def cleanup_sample_folder(self, idx):
+        local_path = self.get_path_local_path(self.samples[idx])
+        shutil.rmtree(local_path)
+
+    def get_path_local_path(self, path):
+        local_path = f"/tmp/local-{hashlib.sha256(path.encode('utf-8')).hexdigest()}/"
+        return local_path
 
 
 

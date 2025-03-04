@@ -28,12 +28,12 @@ if __name__ == "__main__":
 
     training_dataloader = DataLoader(
         rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/rt_train", device="cpu", seq_len=8),
-        batch_size=12, shuffle=True, num_workers=32, prefetch_factor=1
+        batch_size=40, shuffle=True, num_workers=32, prefetch_factor=2
     )
 
     eval_dataloader = DataLoader(
         rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/rt_test", device="cpu", seq_len=8),
-        batch_size=12, shuffle=False, num_workers=16, prefetch_factor=1
+        batch_size=40, shuffle=False, num_workers=32, prefetch_factor=2
     )
 
     test_dataloader = DataLoader(
@@ -42,10 +42,10 @@ if __name__ == "__main__":
     )
 
     model = torch.nn.DataParallel(rtdenoise.LaplacianPyramidUNet().to(device))
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-    scheduler  = torch.optim.lr_scheduler.StepLR(optimizer, step_size=32, gamma=0.9)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
+    scheduler  = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.85)
 
-    model, losses = rtdenoise.train_model(training_dataloader, eval_dataloader, model=model, optimizer=optimizer, scheduler=scheduler, num_epochs=512, device=device)
+    model, losses = rtdenoise.train_model(training_dataloader, eval_dataloader, model=model, optimizer=optimizer, scheduler=scheduler, num_epochs=32, device=device)
 
     print("Losses over time:")
     f = open(f"{os.environ['RTDENOISE_OUTPUT_PATH']}/latest-losses.csv", "w")
