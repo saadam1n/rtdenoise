@@ -26,9 +26,16 @@ class LPUBlock(nn.Module):
     def __init__(self, channels_in, channels_out):
         super(LPUBlock, self).__init__()
 
-        self.batch_norm = nn.BatchNorm2d(channels_in)
-        self.dw_conv = nn.Conv2d(channels_in, channels_in, kernel_size=3, padding=1, groups=channels_in)
-        self.pw_conv = nn.Conv2d(channels_in, channels_in, kernel_size=1)
+        self.pre_mlp_skip = nn.BatchNorm2d(channels_in)
+
+        self.dw_conv = nn.Sequential(
+            nn.BatchNorm2d(channels_in),
+            nn.Conv2d(channels_in, channels_in, kernel_size=3, padding=1, groups=channels_in)
+        )
+        self.pw_conv = nn.Sequential(
+            nn.BatchNorm2d(channels_in),
+            nn.Conv2d(channels_in, channels_in, kernel_size=1)
+        )
         self.channel_mlp = ChannelMlp(channels_in, channels_out, channel_multiplier=2)
 
         self.skip_transform = nn.Sequential(
@@ -38,8 +45,7 @@ class LPUBlock(nn.Module):
 
     def forward(self, x):
 
-        x_norm = self.batch_norm(x)
-        x_updated = self.dw_conv(x_norm) + x 
+        x_updated = self.dw_conv(x) + self.pre_mlp_skip(x)
 
         x_mlp = self.channel_mlp(x_updated) + (self.skip_transform(x_updated) if self.skip_transform is not None else x_updated)
 
