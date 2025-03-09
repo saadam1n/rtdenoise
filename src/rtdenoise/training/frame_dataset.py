@@ -135,14 +135,17 @@ class FrameDataset(Dataset):
     def fetch_sample_folder(self, idx):
         tarball_path = self.samples[idx]
         local_path = self.get_path_local_path(tarball_path)
-        os.makedirs(local_path)
 
+        if os.path.isdir(tarball_path):
+            shutil.copytree(tarball_path, local_path)
+        else:
+            os.makedirs(local_path)
 
-        local_file = local_path + ".tgz"
-        shutil.copyfile(tarball_path, local_file)
-        with tarfile.open(local_file, "r:gz") as tar:
-            tar.extractall(path=local_path)
-        os.remove(local_file)
+            local_file = local_path + ".tgz"
+            shutil.copyfile(tarball_path, local_file)
+            with tarfile.open(local_file, "r:gz") as tar:
+                tar.extractall(path=local_path)
+            os.remove(local_file)
 
         return local_path
 
