@@ -61,7 +61,7 @@ class LPULevel(nn.Module):
         self.encoder = LPUBlock(channels_in, channels_out)
         self.decoder = LPUBlock(channels_out if is_bottleneck else 2 * channels_out, channels_in)
 
-        self.kernel_alpha_predictor = ChannelMlp(channels_in, 9 if is_bottleneck else 10, channel_multiplier=2)
+        self.kernel_alpha_predictor = ChannelMlp(channels_in, 10 if is_bottleneck else 11, channel_multiplier=2)
 
     def encode(self, x):
         return self.encoder(x)
@@ -81,7 +81,7 @@ class LaplacianPyramidUNet(BaseDenoiser):
         self.num_internal_channels = 32
 
         # concate previous frame input and ignore motion vectors
-        self.true_num_input_channels = (self.num_input_channels - 2) * 1
+        self.true_num_input_channels = (self.num_input_channels - 2) * 2
         self.projector = nn.Sequential(
             nn.BatchNorm2d(self.true_num_input_channels),
             nn.Conv2d(self.true_num_input_channels, self.num_internal_channels, kernel_size=1)
@@ -98,11 +98,9 @@ class LaplacianPyramidUNet(BaseDenoiser):
 
         self.per_pixel_conv = PerPixelConv(3)
 
-    def run_frame(self, frame_input, temporal_state):
-        if temporal_state is None:
-            self.clear_memory()
-            temporal_state = True # placeholder value
+        self.warp = TensorWarp()
 
+    def run_frame(self, frame_input, temporal_state):
         B = frame_input.size(0)
         H = frame_input.size(2)
         W = frame_input.size(3)
@@ -114,8 +112,16 @@ class LaplacianPyramidUNet(BaseDenoiser):
         trunc_input = frame_input[:, :9, :, :]
         motionvec = frame_input[:, 9:, :, :]
     
+        if temporal_state is None:
+            self.prev_trunc_input = torch.zeros_like(trunc_input)
+            self.prev_filtered = [None] * len(self.levels)
+
+            temporal_state = True # placeholder value
+        else:
+            self.prev_trunc_input = self.warp(self.prev_trunc_input, motionvec)
+
         # transform features
-        combined_temporal_input = trunc_input 
+        combined_temporal_input = torch.cat((trunc_input, self.prev_trunc_input), dim=1) 
         proj_input = self.projector(combined_temporal_input)
 
         
@@ -151,21 +157,27 @@ class LaplacianPyramidUNet(BaseDenoiser):
 
             current_filtered = self.per_pixel_conv(downsampled_color[i], kernel)
 
+            alpha_components = F.sigmoid(kernel_alpha[:, 9:, :, :])
+            temporal_alpha = alpha_components[:, :1, :, :]
+
+            if self.prev_filtered[i] is not None:
+                current_filtered = current_filtered * temporal_alpha + self.warp(self.prev_filtered[i], motionvec) * (1.0 - temporal_alpha)
+
             if i == len(self.levels) - 1:
                 filtered = current_filtered
             else:
-                alpha_components = F.sigmoid(kernel_alpha[:, 9:, :, :])
-
-                composite_alpha = alpha_components
+                composite_alpha = alpha_components[:, 1:, :, :]
 
                 freq_replacement = F.interpolate(filtered - F.avg_pool2d(current_filtered, kernel_size=2, stride=2), size=upsample_shape)
                 filtered = current_filtered + composite_alpha * freq_replacement
 
+            self.prev_filtered[i] = filtered
 
         # finalize output
         denoised_output = albedo * filtered
 
+        # add the denoised value to the feedback
+        self.prev_trunc_input = torch.cat((filtered, trunc_input[:, 3:, :, :]), dim=1)
+        
+
         return (denoised_output, temporal_state)
-    
-    def clear_memory(self):
-        pass
