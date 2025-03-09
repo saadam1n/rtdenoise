@@ -93,3 +93,35 @@ class PerPixelConv(nn.Module):
         filtered = filtered.sum(2)
 
         return filtered
+    
+class TensorWarp(nn.Module):
+    def __init__(self):
+        super(TensorWarp, self).__init__()
+
+    """
+    Please note that for warping to work optimally, you should give the full-resolution warped vectors. 
+    This is because average motion vectors over an area doesn't work as perfectly as you would expect.
+    """
+    def forward(self, image : torch.Tensor, motionvec : torch.Tensor):
+        N, _, H, W = motionvec.shape
+        _, _, H2, W2 = image.shape
+
+        x, y = torch.meshgrid(
+            torch.linspace(-1, 1, W, device=image.device),
+            torch.linspace(-1, 1, H, device=image.device),
+            indexing="xy"
+        )
+
+        sample_positons = torch.stack(
+            [
+                motionvec[:, 0, :, :] * 2.0 / W + x,
+                y - motionvec[:, 1, :, :] * 2.0 / H
+            ],
+            dim=3
+        )
+
+        warped_image = F.grid_sample(image, sample_positons, mode="bilinear", padding_mode="border", align_corners=True)
+
+        resized_warped_image = F.interpolate(warped_image, size=(H2, W2), mode="bilinear", align_corners=True)
+
+        return resized_warped_image
