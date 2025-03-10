@@ -11,10 +11,14 @@ import hashlib
 import shutil
 import tarfile
 
+def get_path_sha256(path):
+    return hashlib.sha256(path.encode('utf-8')).hexdigest()
+
+def get_cache_prefix():
+    return f"{os.environ['RTDENOISE_OUTPUT_PATH']}/cache/"
+
 def get_cache_path(path):
-    cache_name = hashlib.sha256(path.encode('utf-8')).hexdigest()
-    cache_path = f"{os.environ['RTDENOISE_OUTPUT_PATH']}/cache/" + cache_name
-    return cache_path
+    return get_cache_prefix() + get_path_sha256(path)
 
 def load_exr_image(image_path, manager_dict):
     # replace everything with alpha numeric 
