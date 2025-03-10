@@ -41,7 +41,7 @@ if __name__ == "__main__":
         batch_size=1, shuffle=False, num_workers=8, prefetch_factor=1
     )
 
-    model = torch.nn.DataParallel(rtdenoise.LaplacianPyramidUNet().to(device))
+    model = torch.nn.parallel.DistributedDataParallel(rtdenoise.LaplacianPyramidUNet().to(device))
     optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
     scheduler  = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.85)
 
