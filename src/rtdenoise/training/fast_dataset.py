@@ -54,7 +54,7 @@ def cachify_entry(args):
     torch.save(seq_ref, pt_cache_path + "-seq-ref.pt")
 
 def copy_and_load_tensor(path):
-    download_path = f"{os.environ['RTDENOISE_DOWNLOAD_CACHE']}/{frame_dataset.get_path_sha256(path)}/"
+    download_path = f"{os.environ['RTDENOISE_DOWNLOAD_CACHE']}/{frame_dataset.get_path_sha256(path)}.pt"
     
     shutil.copyfile(path, download_path)
     tensor = torch.load(path, weights_only=True)
@@ -88,7 +88,7 @@ def aggregate_samples(args):
     while len(batch_in) < batch_size:
         seq_in, seq_ref = sample_queue.get()
 
-        batch_ref.append(seq_in)
+        batch_in.append(seq_in)
         batch_ref.append(seq_ref)
 
     batch_queue.put((torch.stack(batch_in), torch.stack(batch_ref)))
@@ -107,7 +107,8 @@ class FastDataset:
         self.prefetch_factor = prefetch_factor
 
         self.pool = mp.Pool(processes=num_processes)
-        self.batch_queue = mp.Queue()
+        self.manager = mp.Manager()
+        self.batch_queue = self.manager.Queue()
 
         if self.prefetch_factor < 1:
             raise ValueError("Cannot have a prefetch factor less than 1")
@@ -145,6 +146,8 @@ class FastDataset:
             current_batch = []
             for j in range(first_sample, last_sample):
                 current_batch.append(shuffled_samples[j])
+
+            self.batches.append(current_batch)
             
         self.next_batch = 0
 
@@ -161,7 +164,8 @@ class FastDataset:
         batch_tensor = self.fetch_next_available_batch()
 
         self.next_batch += 1
-        self.enqueue_batch_for_load(self.next_batch + self.prefetch_factor)
+        if self.next_batch + self.prefetch_factor < len(self.batches):
+            self.enqueue_batch_for_load(self.next_batch + self.prefetch_factor)
 
         return batch_tensor
 
@@ -171,7 +175,7 @@ class FastDataset:
         """
 
         batch_to_load = self.batches[batch_index]
-        sample_queue = mp.Queue()
+        sample_queue = self.manager.Queue()
 
         load_args = [
             (
@@ -196,14 +200,3 @@ class FastDataset:
         print(f"\tFound {len(uncached_files)}\tuncached entries in this dataset. Building cache for uncached entries...")
 
         self.pool.map(cachify_entry, uncached_files)
-
-
-if __name__ == "__main__":
-    print(f"Beginning testing!")
-    exr.set_default_channel_names(2, ["r", "g"])
-
-    fd = FastDataset("/home/saada/Datasets/rt_test/", 8, batch_size=40, num_processes=20, prefetch_factor=3)
-
-
-    for i, batch in enumerate(fd):
-        pass
