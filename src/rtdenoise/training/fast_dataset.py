@@ -13,7 +13,7 @@ import random
 import shutil
 import tarfile
 
-import frame_dataset
+from . import frame_dataset
 
 def load_exr_as_tensor(path):
     return torch.from_numpy(exr.imread(path)).permute(2, 0, 1)

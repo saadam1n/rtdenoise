@@ -5,6 +5,8 @@ from .models.kpcn import *
 from .models.laplacian_pyramid_unet import *
 
 
-from .training import frame_dataset, train
+from .training import frame_dataset, train, fast_dataset
 from .training.frame_dataset import *
+from .training.fast_dataset import *
+from .training.prebatched_dataset import *
 from .training.train import *

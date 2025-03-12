@@ -14,9 +14,14 @@ def unsqueeze_inputs(data):
     if inputs.dim() < 4:
         inputs = inputs.unsqueeze(0)
         reference = reference.unsqueeze(0)
+    elif inputs.dim() > 4:
+        inputs = inputs.flatten(start_dim=0, end_dim=1)
+        reference = reference.flatten(start_dim=0, end_dim=1)
 
     return inputs, reference
 
+# comment to force recration of docker image
+# please force recreation
 if __name__ == "__main__":
     # this package is meant to be GPU-only, unless you are a crazy person
     if torch.cuda.is_available():
@@ -26,26 +31,14 @@ if __name__ == "__main__":
     else:
         raise RuntimeError("Unable to find suitable GPU for training!")
 
-    training_dataloader = DataLoader(
-        rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/rt_train", device="cpu", seq_len=8),
-        batch_size=40, shuffle=True, num_workers=32, prefetch_factor=2
-    )
+    dataset = rtdenoise.PrebatchedDataset(os.environ['RTDENOISE_DATASET_PATH'], ["color", "albedo", "normal", "motionvec"])
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=16, prefetch_factor=2)
 
-    eval_dataloader = DataLoader(
-        rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/rt_test", device="cpu", seq_len=8),
-        batch_size=40, shuffle=False, num_workers=32, prefetch_factor=2
-    )
-
-    test_dataloader = DataLoader(
-        rtdenoise.FrameDataset(dataset_folder=f"{os.environ['RTDENOISE_DATASET_PATH']}/test_fullres_dir", device="cpu", seq_len=8),
-        batch_size=1, shuffle=False, num_workers=8, prefetch_factor=1
-    )
-
-    model = torch.nn.parallel.DistributedDataParallel(rtdenoise.LaplacianPyramidUNet().to(device))
+    model = torch.nn.DataParallel(rtdenoise.LaplacianPyramidUNet().to(device))
     optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
     scheduler  = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.85)
 
-    model, losses = rtdenoise.train_model(training_dataloader, eval_dataloader, model=model, optimizer=optimizer, scheduler=scheduler, num_epochs=32, device=device)
+    model, losses = rtdenoise.train_model(dataset, dataloader, model=model, optimizer=optimizer, scheduler=scheduler, num_epochs=2, device=device)
 
     print("Losses over time:")
     f = open(f"{os.environ['RTDENOISE_OUTPUT_PATH']}/latest-losses.csv", "w")
@@ -60,9 +53,11 @@ if __name__ == "__main__":
     with torch.no_grad():
         loss_fn = torch.nn.L1Loss()
 
+        dataset.switch_mode(training=False, fullres=True)
+
         model.eval()
 
-        for seq_idx, data in enumerate(test_dataloader):
+        for seq_idx, data in enumerate(dataloader):
             print(f"Processing test sequence {seq_idx}")
 
             seq_in, seq_ref = unsqueeze_inputs(data)
@@ -94,6 +89,4 @@ if __name__ == "__main__":
             
 
     print("Done!")
-    while True:
-        time.sleep(1.0)
     
