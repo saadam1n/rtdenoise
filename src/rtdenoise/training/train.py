@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 
 import os
 import openexr_numpy as exr
+import time
 
 def unsqueeze_inputs(data):
     inputs, reference = data
@@ -19,6 +20,16 @@ def unsqueeze_inputs(data):
         reference = reference.flatten(start_dim=0, end_dim=1)
 
     return inputs, reference
+
+class ModelTimer():
+    def __init__(self, name):
+        self.name = name
+        self.start = time.time()
+
+    def stop_and_str(self):
+        delta = time.time() - self.start
+
+        return f"\tmodel timer {self.name}:\t{delta}"
 
 def train_model(
         dataset : prebatched_dataset.PrebatchedDataset,
@@ -56,6 +67,8 @@ def train_model(
             seq_ref = seq_ref.to(device)
 
             for i in range(num_models):
+                mt = ModelTimer(names[i])
+
                 optimizers[i].zero_grad()
 
                 seq_out = models[i](seq_in)
@@ -65,7 +78,7 @@ def train_model(
 
                 optimizers[i].step()
 
-                print(f"\t\tLoss for model {names[i]}\twas {loss.item()}")
+                print(f"\t\tLoss for model {names[i]}\twas {loss.item()}\t{mt.stop_and_str()}")
 
                 accum_training_loss[i] += loss.item() * seq_in.shape[0]
                 
@@ -83,6 +96,7 @@ def train_model(
 
             for model in models:
                 model.eval()
+
             for batch_idx, data in enumerate(dataloader):
                 print(f"\tProcessing eval batch {batch_idx}")
 
