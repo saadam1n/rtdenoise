@@ -125,3 +125,73 @@ class TensorWarp(nn.Module):
         resized_warped_image = F.interpolate(warped_image, size=(H2, W2), mode="bilinear", align_corners=True)
 
         return resized_warped_image
+    
+class NonZeroFeatureExtractor(nn.Module):
+    """This class extracts more useful information on a global context from the image."""
+    def __init__(self, scales):
+        super(NonZeroFeatureExtractor, self).__init__()
+
+        self.scales = scales
+
+    def forward(self, x):
+        lum = F.conv2d(x, weight=torch.ones(1, 3, 1, 1, device=x.device) / 3.0)
+        nonzero = (lum != 0).float()
+
+        features = torch.cat(
+            [feature for scale in self.scales for feature in self.extract_features_at_scale(lum, nonzero, scale)], 
+            dim=1
+        )
+
+        return features
+    
+    def extract_features_at_scale(self, lum, nonzero, scale):
+        kernel = torch.ones(1, 1, scale, scale, device=lum.device)
+
+        percentage = F.conv2d(nonzero, weight=kernel, padding=scale // 2)
+        pool = F.conv2d(lum, kernel, padding=scale // 2) / percentage.clamp_min(min=1)
+
+        percentage = percentage / (scale * scale)
+
+        return [percentage, pool]
+
+
+class DepthPointwiseBlock(nn.Module):
+    """
+    Building block for the LPU and other U-Nets.
+    To improve performance and numerical stability, the post-FFN skip connection has been removed.
+    """
+    def __init__(self, channels_in, channels_out):
+        super(DepthPointwiseBlock, self).__init__()
+
+        self.dw_conv = nn.Sequential(
+            nn.BatchNorm2d(channels_in),
+            nn.Conv2d(channels_in, channels_in, kernel_size=3, padding=1, groups=channels_in)
+        )
+        self.pw_conv = nn.Sequential(
+            nn.BatchNorm2d(channels_in),
+            nn.Conv2d(channels_in, channels_in, kernel_size=1)
+        )
+        self.channel_mlp = ChannelMlp(channels_in, channels_out, channel_multiplier=2)
+
+
+    """
+    Refer to "GLU Variants Improve Transformer"
+    https://arxiv.org/pdf/2002.05202v1 
+
+    We notice that our DW x PW combination is analogous to a ReGLU.
+    Since the PW convolution will have more expressive power, we put the ReLU on that.
+    """
+    def forward(self, x):
+        """
+        We need to be careful about weight initialization to prevent exploding gradients.
+        - Assume x is value with mean 0 and var 1
+        - DW conv produces value with mean 0 and var 1
+        - PW conv produces value with mean 0 and var 1
+        - DW * PW produces value with mean 0 and var 1
+        - DW * PW + x produces value with mean 0 and var 2
+        """
+        glu = self.dw_conv(x) * F.relu(self.pw_conv(x)) + x
+
+        mlp = self.channel_mlp(glu)
+
+        return mlp

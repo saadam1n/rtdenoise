@@ -80,8 +80,11 @@ class LaplacianPyramidUNet(BaseDenoiser):
     def init_components(self):
         self.num_internal_channels = 32
 
+        self.feature_scales = [5, 11, 17, 29]
+        self.feature_extractor = NonZeroFeatureExtractor(self.feature_scales)
+
         # concate previous frame input and ignore motion vectors
-        self.true_num_input_channels = (self.num_input_channels - 2) * 2
+        self.true_num_input_channels = (self.num_input_channels - 2) * 2 + len(self.feature_scales) * 2
         self.projector = nn.Sequential(
             nn.BatchNorm2d(self.true_num_input_channels),
             nn.Conv2d(self.true_num_input_channels, self.num_internal_channels, kernel_size=1)
@@ -120,8 +123,12 @@ class LaplacianPyramidUNet(BaseDenoiser):
         else:
             self.prev_trunc_input = self.warp(self.prev_trunc_input, motionvec)
 
+            self.prev_filtered = [
+                self.warp(prev_filtered, motionvec) for prev_filtered in self.prev_filtered
+            ]
+
         # transform features
-        combined_temporal_input = torch.cat((trunc_input, self.prev_trunc_input), dim=1) 
+        combined_temporal_input = torch.cat((trunc_input, self.prev_trunc_input, self.feature_extractor(frame_input[:, :3, :, :])), dim=1) 
         proj_input = self.projector(combined_temporal_input)
 
         
