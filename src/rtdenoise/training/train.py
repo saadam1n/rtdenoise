@@ -66,6 +66,9 @@ def train_model(
             seq_in = seq_in.to(device)
             seq_ref = seq_ref.to(device)
 
+            with torch.no_grad():
+                seq_in.clamp_max_(max=32.0)
+
             for i in range(num_models):
                 mt = ModelTimer(names[i])
 
@@ -104,6 +107,9 @@ def train_model(
                 seq_in = seq_in.to(device)
                 seq_ref = seq_ref.to(device)
 
+                with torch.no_grad():
+                    seq_in.clamp_max_(max=32.0)
+
                 for i in range(num_models):
                     seq_out = models[i](seq_in)
 
@@ -131,6 +137,9 @@ def train_model(
 
                 seq_in = seq_in.to(device)
                 seq_ref = seq_ref.to(device)
+
+                with torch.no_grad():
+                    seq_in.clamp_max_(max=32.0)
 
                 for i in range(num_models):
                     seq_out = models[i](seq_in)

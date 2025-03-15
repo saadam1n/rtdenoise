@@ -1,8 +1,7 @@
 import torch
 
-from .models import kpcn, laplacian_pyramid_unet
-from .models.kpcn import *
-from .models.laplacian_pyramid_unet import *
+from .models import laplacian_denoiser, single_frame_diffusion
+from .models.laplacian_denoiser import *
 from .models.single_frame_diffusion import *
 
 

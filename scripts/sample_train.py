@@ -19,12 +19,11 @@ if __name__ == "__main__":
     else:
         raise RuntimeError("Unable to find suitable GPU for training!")
 
-    dataset = rtdenoise.PrebatchedDataset(os.environ['RTDENOISE_DATASET_PATH'], buffers=["color", "albedo", "normal", "motionvec"], truncated_batch_size=2)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=2, prefetch_factor=2)
+    dataset = rtdenoise.PrebatchedDataset(os.environ['RTDENOISE_DATASET_PATH'], buffers=["color", "albedo", "normal", "motionvec"], truncated_batch_size=10)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4, prefetch_factor=4)
 
     models = [
-        rtdenoise.LaplacianPyramidUNet(),
-        rtdenoise.SingleFrameDiffusion()
+        rtdenoise.LaplacianDenoiser()
     ]
 
     names = [
@@ -43,7 +42,7 @@ if __name__ == "__main__":
         torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.85) for optimizer in optimizers
     ]
 
-    model, losses = rtdenoise.train_model(dataset, dataloader, models=parallel_models, optimizers=optimizers, schedulers=schedulers, names=names, num_epochs=1, device=device)
+    model, losses = rtdenoise.train_model(dataset, dataloader, models=parallel_models, optimizers=optimizers, schedulers=schedulers, names=names, num_epochs=32, device=device)
 
     print("Losses over time:")
     with open(f"{os.environ['RTDENOISE_OUTPUT_PATH']}/latest-losses.csv", "w") as f:
