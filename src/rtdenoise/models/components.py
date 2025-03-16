@@ -6,6 +6,7 @@ import torch.utils.checkpoint as checkpoint
 
 import openexr_numpy as exr
 import os
+import sys
 
 """
 Custom "operators"
@@ -77,6 +78,11 @@ def op_extract_nz_features(image : torch.Tensor, scales=list[int]):
     return features
 
 
+def op_dbg_channel_stats(image: torch.Tensor):
+    with torch.no_grad():
+        var, mean = torch.var_mean(image, dim=[0, 2, 3], keepdim=False, unbiased=False)
+    return var, mean
+
 """
 Modules
 """
@@ -110,14 +116,13 @@ class GatedFormerBlock(nn.Module):
         self.dw_conv = nn.Sequential(
             nn.BatchNorm2d(channels_in),
             nn.Conv2d(channels_in, channels_in, kernel_size=3, padding=1, groups=channels_in),
-            nn.BatchNorm2d(channels_in),
         )
 
+        # we utilize sigmoid instead of ReLU here for increased numerical stability
         self.pw_conv = nn.Sequential(
             nn.BatchNorm2d(channels_in),
             nn.Conv2d(channels_in, channels_in, kernel_size=1),
-            nn.ReLU(),
-            nn.BatchNorm2d(channels_in),
+            nn.Sigmoid() 
         )
 
         self.channel_mlp = FeedForwardReLU(channels_in, channels_out, channel_multiplier=2)
@@ -169,11 +174,11 @@ class UNetConvolutionBlock(nn.Module):
     A general convolution block for U-Nets. Contains an encoder and decoder pair built on DepthPointwiseBlock.
     If is_bottleneck is true, the decoder block will not expect a skip connection.
     """
-    def __init__(self, channels_in, channels_out, is_bottleneck):
+    def __init__(self, channels_in, channels_out, channels_extra, is_bottleneck):
         super(UNetConvolutionBlock, self).__init__()
 
         self.encoder = GatedFormerBlock(channels_in, channels_out)
-        self.decoder = GatedFormerBlock(channels_out if is_bottleneck else 2 * channels_out, channels_in)
+        self.decoder = GatedFormerBlock(channels_extra + (channels_out if is_bottleneck else 2 * channels_out), channels_in)
 
     def encode(self, x):
         return self.encoder(x)
@@ -192,17 +197,16 @@ class LaplacianFilter(nn.Module):
 
         self.num_ka_channels = 10 if is_bottleneck else 11
 
-        self.ka_predictor = nn.Sequential(
-            FeedForwardReLU(channels_in, self.num_ka_channels, channel_multiplier=2),
-            nn.BatchNorm2d(self.num_ka_channels)
-        )
+        self.ka_predictor = FeedForwardReLU(channels_in, self.num_ka_channels, channel_multiplier=2)
 
     def forward(self, latent_ka, radiance, hidden_state, prev_level, motionvec):
+        # channel format: (kernel, temporal alpha, composite alpha)
         ka = self.ka_predictor(latent_ka)
 
-        # extract temporal alpha and kernel
-        kernel = F.softmax(ka[:, :9, :, :] / 3.0, dim=1)
-        alpha_t = F.sigmoid(ka[:, 9:10, :, :])
+        # like the "Attention is All You Need" paper we divide our logits 
+        # by a constant value to increase gradient flow early in training
+        kernel = F.softmax(ka[:, :9, :, :] / 9.0, dim=1)
+        alpha_t = F.sigmoid(ka[:, 9:10, :, :] / 9.0)
 
         if hidden_state is None:
             hidden_state = torch.zeros_like(radiance)
@@ -211,9 +215,12 @@ class LaplacianFilter(nn.Module):
 
         filtered = op_per_pixel_conv(image=radiance, kernel=kernel, kernel_size=3) * alpha_t + hidden_state * (1.0 - alpha_t)
 
-        # laplacian composition involves swapping out the low frequencies of a signal with its downsampled counterpart
+        # laplacian composition involves swapping out the low frequencies 
+        # of a signal with its downsampled counterpart.
+        # this can be viewed as a gated linear unit that modulates both images
+        # to combine them.
         if prev_level is not None:
-            alpha_c = F.sigmoid(ka[:, 10:, :, :])
+            alpha_c = F.sigmoid(ka[:, 10:, :, :] / 9.0)
 
             delta_bands = F.interpolate(
                 prev_level - F.avg_pool2d(filtered, kernel_size=2, stride=2),
@@ -237,6 +244,7 @@ class LaplacianUNet(nn.Module):
             UNetConvolutionBlock(
                 channels_in=self.channels[i - 1], 
                 channels_out=self.channels[i], 
+                channels_extra=0,
                 is_bottleneck=(i == len(self.channels) - 1)
             ) for i in range(1, len(self.channels))
         ])
@@ -289,8 +297,65 @@ class LaplacianUNet(nn.Module):
             )
 
             hidden_states[i] = filtered
-        
+
         return filtered
         
     def create_empty_hidden_state(self):
         return [None] * len(self.filters)
+    
+
+class LatentDiffusionNet(nn.Module):
+    def __init__(self, channels):
+        super(LatentDiffusionNet, self).__init__()
+
+        # self.channels[0] corresponds to the input to the entire network
+        # self.channels[1...n] corresponds to the output of each encoder block
+        self.channels = channels
+
+        self.levels = nn.ModuleList([
+            UNetConvolutionBlock(
+                channels_in=self.channels[i - 1], 
+                channels_out=self.channels[i], 
+                channels_extra=self.channels[i],
+                is_bottleneck=(i == len(self.channels) - 1)
+            ) for i in range(1, len(self.channels))
+        ])
+
+    def forward(self, latent, motionvec, hidden_states):
+        # encoder pass 
+        skip_tensors = []
+        for i, level in enumerate(self.levels):
+            skip_tensors.append(
+                checkpoint.checkpoint(
+                    level.encode,
+                    latent if i == 0 
+                    else F.max_pool2d(skip_tensors[i - 1], kernel_size=2, stride=2),
+                    use_reentrant=False
+                )
+            )
+
+        # decoder pass
+        for i, level in reversed(list(enumerate(self.levels))):
+            decoder_inputs = [
+                skip_tensors[i],
+                op_warp_tensor(hidden_states[i], motionvec) if hidden_states[i] is not None else torch.zeros_like(skip_tensors[i])
+            ]
+
+            if i != len(self.levels) - 1:
+                decoder_inputs.append(
+                    F.interpolate(decoded_latent, size=skip_tensors[i].shape[2:4], mode="bilinear", align_corners=True)
+                )
+
+            decoded_latent = checkpoint.checkpoint(
+                level.decode,
+                torch.cat(decoder_inputs, dim=1),
+                use_reentrant=False
+            )
+
+            hidden_states[i] = decoded_latent
+
+        # add skip connection
+        return decoded_latent + latent
+        
+    def create_empty_hidden_state(self):
+        return [None] * len(self.levels)

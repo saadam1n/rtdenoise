@@ -10,29 +10,6 @@ import torch.utils.checkpoint as checkpoint
 from .base_denoiser import BaseDenoiser
 from .components import *
 
-class UNetConvolutionBlock(nn.Module):
-    """A resolution level of a LPU Net. is_bottleneck changes input and output behavior"""
-    def __init__(self, channels_in, channels_out, is_bottleneck):
-        super(UNetConvolutionBlock, self).__init__()
-
-        self.encoder = GatedFormerBlock(channels_in, channels_out)
-        self.decoder = GatedFormerBlock(channels_out if is_bottleneck else 2 * channels_out, channels_in)
-
-        self.kernel_alpha_predictor = FeedForwardReLU(channels_in, 10 if is_bottleneck else 11, channel_multiplier=2)
-
-    def encode(self, x):
-        return self.encoder(x)
-    
-    def decode(self, x):
-        dec = self.decoder(x)
-        kernel_alpha = self.kernel_alpha_predictor(dec)
-
-        # expect user to apply kernel prediction externally
-        return dec, kernel_alpha
-
-    def clear_memory(self):
-        pass
-
 class LaplacianDenoiser(BaseDenoiser):
     def init_components(self):
         self.num_internal_channels = 32
@@ -77,7 +54,8 @@ class LaplacianDenoiser(BaseDenoiser):
         )
 
 
-        denoised = albedo * self.l_unet(color, latent_features, motionvec, hidden_state)
-        temporal_state = (input, hidden_state)
+        filtered = self.l_unet(color, latent_features, motionvec, hidden_state)
+        denoised = albedo * filtered
+        temporal_state = (torch.cat((filtered, prev_input[:, 3:, :, :]), dim=1), hidden_state)
 
         return (denoised, temporal_state)

@@ -23,6 +23,7 @@ if __name__ == "__main__":
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4, prefetch_factor=4)
 
     models = [
+        rtdenoise.SingleFrameDiffusion(),
         rtdenoise.LaplacianDenoiser()
     ]
 
@@ -35,11 +36,11 @@ if __name__ == "__main__":
     ]
 
     optimizers = [
-        torch.optim.Adam(model.parameters()) for model in parallel_models
+        torch.optim.Adam(model.parameters(), lr=0.005) for model in parallel_models
     ]
 
     schedulers = [
-        torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.85) for optimizer in optimizers
+        torch.optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.85) for optimizer in optimizers
     ]
 
     model, losses = rtdenoise.train_model(dataset, dataloader, models=parallel_models, optimizers=optimizers, schedulers=schedulers, names=names, num_epochs=32, device=device)

@@ -66,8 +66,9 @@ def train_model(
             seq_in = seq_in.to(device)
             seq_ref = seq_ref.to(device)
 
+            # clamp high energy paths
             with torch.no_grad():
-                seq_in.clamp_max_(max=32.0)
+                seq_in[:, :3, :, :].clamp_max_(max=128.0)
 
             for i in range(num_models):
                 mt = ModelTimer(names[i])
@@ -107,8 +108,9 @@ def train_model(
                 seq_in = seq_in.to(device)
                 seq_ref = seq_ref.to(device)
 
+                # clamp high energy paths
                 with torch.no_grad():
-                    seq_in.clamp_max_(max=32.0)
+                    seq_in[:, :3, :, :].clamp_max_(max=128.0)
 
                 for i in range(num_models):
                     seq_out = models[i](seq_in)
@@ -128,6 +130,20 @@ def train_model(
 
             losses.append((training_loss, test_loss))
 
+            print("Full loss history:")
+            for loss in losses:
+                training_loss, eval_loss = loss
+
+                console_row = f"\tEpoch {i}:\t"
+
+                for j in range(len(models)):
+                    console_row = f"{console_row},\t{training_loss[j]} ({names[j]})"
+
+                for j in range(len(models)):
+                    console_row = f"{console_row},\t{eval_loss[j]} ({names[j]})"
+
+                print(console_row)
+
             dataset.switch_mode(training=False, fullres=True)
 
             for seq_idx, data in enumerate(dataloader):
@@ -138,8 +154,9 @@ def train_model(
                 seq_in = seq_in.to(device)
                 seq_ref = seq_ref.to(device)
 
+                # clamp high energy paths
                 with torch.no_grad():
-                    seq_in.clamp_max_(max=32.0)
+                    seq_in[:, :3, :, :].clamp_max_(max=128.0)
 
                 for i in range(num_models):
                     seq_out = models[i](seq_in)
