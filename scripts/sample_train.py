@@ -19,8 +19,34 @@ if __name__ == "__main__":
     else:
         raise RuntimeError("Unable to find suitable GPU for training!")
 
-    dataset = rtdenoise.PrebatchedDataset(os.environ['RTDENOISE_DATASET_PATH'], buffers=["color", "albedo", "normal", "motionvec"], truncated_batch_size=10)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4, prefetch_factor=4)
+    if os.environ['RTDENOISE_DATASET_PATH'].find("/mnt/") != -1:
+        # dataset folder is mounted externally, we can assume dataset is large
+        # therefore we most likely are running on a server
+        # turn our resource count up
+
+        print(f"Configuring training settings for a server envioronment.")
+        num_workers = 32
+        prefetch_factor = 1
+        truncated_batch_size = None
+        num_epochs = 32
+
+    else:
+        # we are running locally and are most likely debugging instead of doing
+        # a full-blown training job
+        print(f"Configuring training settings for a workstation envioronment.")
+        num_workers = 2
+        prefetch_factor = 2
+        truncated_batch_size = 8
+        num_epochs = 8
+
+
+    dataset = rtdenoise.PrebatchedDataset(os.environ['RTDENOISE_DATASET_PATH'], buffers=["color", "albedo", "normal", "motionvec"], truncated_batch_size=truncated_batch_size)
+
+
+
+
+
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=num_workers, prefetch_factor=prefetch_factor)
 
     models = [
         rtdenoise.SingleFrameDiffusion(),
@@ -36,14 +62,15 @@ if __name__ == "__main__":
     ]
 
     optimizers = [
-        torch.optim.Adam(model.parameters(), lr=0.005) for model in parallel_models
+        torch.optim.Adam(parallel_models[0].parameters(), lr=0.005),
+        torch.optim.Adam(parallel_models[1].parameters(), lr=0.0005),
     ]
 
     schedulers = [
-        torch.optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.85) for optimizer in optimizers
+        torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.85) for optimizer in optimizers
     ]
 
-    model, losses = rtdenoise.train_model(dataset, dataloader, models=parallel_models, optimizers=optimizers, schedulers=schedulers, names=names, num_epochs=32, device=device)
+    model, losses = rtdenoise.train_model(dataset, dataloader, models=parallel_models, optimizers=optimizers, schedulers=schedulers, names=names, num_epochs=num_epochs, device=device)
 
     print("Losses over time:")
     with open(f"{os.environ['RTDENOISE_OUTPUT_PATH']}/latest-losses.csv", "w") as f:
