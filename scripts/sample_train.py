@@ -49,6 +49,7 @@ if __name__ == "__main__":
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=num_workers, prefetch_factor=prefetch_factor)
 
     models = [
+        rtdenoise.TransformerDenoiser(),
         rtdenoise.SingleFrameDiffusion(),
         rtdenoise.LaplacianDenoiser()
     ]
@@ -62,8 +63,7 @@ if __name__ == "__main__":
     ]
 
     optimizers = [
-        torch.optim.Adam(parallel_models[0].parameters(), lr=0.005),
-        torch.optim.Adam(parallel_models[1].parameters(), lr=0.0005),
+        torch.optim.Adam(model.parameters(), lr=0.005) for model in parallel_models
     ]
 
     schedulers = [

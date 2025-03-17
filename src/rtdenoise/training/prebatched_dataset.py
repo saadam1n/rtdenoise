@@ -7,7 +7,7 @@ from . import frame_dataset
 
 class PrebatchedDataset(torch.utils.data.Dataset):
     """A prebatched dataset."""
-    def __init__(self, folder, buffers, truncated_batch_size=-1):
+    def __init__(self, folder, buffers, truncated_batch_size=None):
         super(PrebatchedDataset, self).__init__()
 
         with open(os.path.join(folder, "format.txt"), "r") as f:
@@ -56,7 +56,7 @@ class PrebatchedDataset(torch.utils.data.Dataset):
         seq_in = tensors["seq_in"]
         seq_ref = tensors["seq_ref"]
 
-        if self.truncated_batch_size != -1 and not self.fullres:
+        if (self.truncated_batch_size is not None) and (not self.fullres):
             seq_in = seq_in[:self.truncated_batch_size]
             seq_ref = seq_ref[:self.truncated_batch_size]
 

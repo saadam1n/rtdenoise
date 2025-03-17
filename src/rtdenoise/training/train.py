@@ -246,7 +246,7 @@ def train_model(
             for loss in losses:
                 training_loss, eval_loss = loss
 
-                console_row = f"\tEpoch {i}:\t"
+                console_row = f"\tEpoch {epoch}:\t"
 
                 for j in range(len(models)):
                     console_row = f"{console_row},\t{training_loss[j]} ({names[j]})"

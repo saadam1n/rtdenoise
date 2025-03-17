@@ -3,6 +3,7 @@ import torch
 from .models import laplacian_denoiser, single_frame_diffusion
 from .models.laplacian_denoiser import *
 from .models.single_frame_diffusion import *
+from .models.transformer_denoiser import *
 
 
 from .training import frame_dataset, train, fast_dataset

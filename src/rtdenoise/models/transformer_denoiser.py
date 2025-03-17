@@ -1,7 +1,3 @@
-"""
-This file describes a Laplacian UNet Pyramid Denoiser (LPUNet). The denoiser is more of a skeleton for any multiscale denoising,
-but I am using it to determine whether a lightweight MetaFormer architecture might be viable for denoising.
-"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,7 +6,7 @@ import torch.utils.checkpoint as checkpoint
 from .base_denoiser import BaseDenoiser
 from .components import *
 
-class LaplacianDenoiser(BaseDenoiser):
+class TransformerDenoiser(BaseDenoiser):
     def init_components(self):
         self.num_internal_channels = 32
 
@@ -23,7 +19,7 @@ class LaplacianDenoiser(BaseDenoiser):
             nn.Conv2d(self.true_num_input_channels, self.num_internal_channels, kernel_size=1)
         )
 
-        self.l_unet = LaplacianUNet(channels=[32, 32, 64, 64, 96, 128, 128])
+        self.t_unet = TransformerUNet(channels=[self.num_internal_channels, 32, 32, 48, 48, 64, 96])
 
 
     def run_frame(self, frame_input : torch.Tensor, temporal_state):
@@ -40,10 +36,11 @@ class LaplacianDenoiser(BaseDenoiser):
     
         if temporal_state is None:
             prev_input = torch.zeros_like(input)
-            hidden_state = self.l_unet.create_empty_hidden_state()
+            hidden_state = self.t_unet.create_empty_hidden_state()
         else:
             prev_input, hidden_state = temporal_state
             prev_input = op_warp_tensor(prev_input, motionvec)
+
 
         latent_features = self.projector(
             torch.cat((
@@ -54,7 +51,15 @@ class LaplacianDenoiser(BaseDenoiser):
         )
 
 
-        filtered, _, hidden_state = self.l_unet(color, latent_features, motionvec, *hidden_state)
+        filtered, hidden_state = checkpoint.checkpoint(
+            self.t_unet, 
+            color, 
+            latent_features, 
+            motionvec, 
+            *hidden_state, 
+            use_reentrant=False
+        )
+
         denoised = albedo * filtered
         temporal_state = (torch.cat((filtered, input[:, 3:, :, :]), dim=1), hidden_state)
 
