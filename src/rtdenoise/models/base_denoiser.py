@@ -18,13 +18,13 @@ class BaseDenoiser(nn.Module):
     def init_components(self):
         raise RuntimeError("init_components method for denoise is not implemented!")
 
-    def forward(self, input):
+    def forward(self, input : torch.Tensor):
         B = input.size(0)
         num_frames = input.size(1) // self.num_input_channels
         H = input.size(2)
         W = input.size(3)
 
-        output = torch.empty(B, 3 * num_frames, H, W, device=input.device)
+        output = torch.empty(B, 3 * num_frames, H, W, device=input.device, dtype=input.dtype)
         temporal_state = None
 
         for i in range(num_frames):

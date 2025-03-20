@@ -42,16 +42,10 @@ if __name__ == "__main__":
 
     dataset = rtdenoise.PrebatchedDataset(os.environ['RTDENOISE_DATASET_PATH'], buffers=["color", "albedo", "normal", "motionvec"], truncated_batch_size=truncated_batch_size)
 
-
-
-
-
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=num_workers, prefetch_factor=prefetch_factor)
 
     models = [
-        rtdenoise.TransformerDenoiser(),
-        rtdenoise.SingleFrameDiffusion(),
-        rtdenoise.LaplacianDenoiser()
+        rtdenoise.GlobalContextPreEncoderTransformer()
     ]
 
     names = [
@@ -59,11 +53,12 @@ if __name__ == "__main__":
     ]
 
     parallel_models = [
-        torch.nn.DataParallel(model.to(device)) for model in models
+        #torch.nn.DataParallel(model.to(device)) for model in models
+        model.to(device) for model in models
     ]
 
     optimizers = [
-        torch.optim.Adam(model.parameters(), lr=0.005) for model in parallel_models
+        torch.optim.Adam(model.parameters(), lr=0.0005) for model in parallel_models
     ]
 
     schedulers = [

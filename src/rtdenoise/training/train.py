@@ -24,6 +24,10 @@ def reformat_inputs(data, device):
 
     with torch.no_grad():
         inputs.clamp_max_(max = 128.0)
+        reference.clamp_max_(max = 128.0)
+
+        #inputs = inputs.half()
+        #reference = reference.half()
 
     return inputs, reference
 
@@ -75,6 +79,7 @@ def run_epoch(
         schedulers, 
         names : list[str],
         loss_fn : nn.Module,
+        scaler : torch.GradScaler,
         device,
     ):
 
@@ -98,12 +103,13 @@ def run_epoch(
 
             optimizers[i].zero_grad()
 
-            seq_out = models[i](seq_in)
+            with torch.autocast(device_type=device, dtype=torch.float16):
+                seq_out = models[i](seq_in)
+                loss = loss_fn(seq_out, seq_ref)
+                scaler.scale(loss).backward()
+                scaler.step(optimizers[i])
 
-            loss = loss_fn(seq_out, seq_ref)
-            loss.backward()
-
-            optimizers[i].step()
+            scaler.update()
 
             print(f"\t\tLoss for model {names[i]}\twas {loss.item()}\t{mt.stop_and_str()}")
 
@@ -127,6 +133,7 @@ def run_eval(
         dataloader : torch.utils.data.DataLoader, 
         models : list[BaseDenoiser], 
         loss_fn : nn.Module,
+        scaler : torch.GradScaler,
         device,
     ):
 
@@ -144,9 +151,10 @@ def run_eval(
         seq_in, seq_ref = reformat_inputs(data, device)
 
         for i in range(num_models):
-            seq_out = models[i](seq_in)
 
-            loss = loss_fn(seq_out, seq_ref)
+            with torch.autocast(device_type=device, dtype=torch.float16):
+                seq_out = models[i](seq_in)
+                loss = loss_fn(seq_out, seq_ref)
         
             # Update statistics
             accum_test_loss[i] += loss.item() *  seq_ref.shape[0]
@@ -163,6 +171,7 @@ def run_test(
         models : list[BaseDenoiser], 
         names : list[str],
         loss_fn : nn.Module,
+        scaler : torch.GradScaler,
         dump_prefix,
         device,
     ):
@@ -176,10 +185,13 @@ def run_test(
 
         folder = os.path.join(dump_prefix, f"seq{seq_idx}")
         for i in range(num_models):
+            with torch.autocast(device_type=device, dtype=torch.float16):
+                seq_out = models[i](seq_in)
+
             dump_test_sequence(
                 folder=folder, 
                 name=names[i], 
-                seq_out=models[i](seq_in), 
+                seq_out=seq_out, 
                 seq_ref=seq_ref, 
                 loss_fn=loss_fn
             )
@@ -207,6 +219,8 @@ def train_model(
     ):
     num_models = len(models)
 
+    scaler = torch.GradScaler()
+
     loss_fn = torch.nn.L1Loss()
     losses = []
 
@@ -222,6 +236,7 @@ def train_model(
             schedulers=schedulers,
             names=names,
             loss_fn=loss_fn,
+            scaler=scaler,
             device=device
         )
 
@@ -232,6 +247,7 @@ def train_model(
                 dataloader=dataloader,
                 models=models,
                 loss_fn=loss_fn,
+                scaler=scaler,
                 device=device
             )
             
@@ -262,6 +278,7 @@ def train_model(
                 models=models,
                 names=names,
                 loss_fn=loss_fn,
+                scaler=scaler,
                 dump_prefix=os.path.join(os.environ['RTDENOISE_OUTPUT_PATH'], f"test/epoch{epoch}"),
                 device=device
             )

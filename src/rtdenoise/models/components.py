@@ -36,8 +36,8 @@ def op_warp_tensor(image : torch.Tensor, motionvec : torch.Tensor):
     _, _, H2, W2 = image.shape
 
     x, y = torch.meshgrid(
-        torch.linspace(-1, 1, W, device=image.device),
-        torch.linspace(-1, 1, H, device=image.device),
+        torch.linspace(-1, 1, W, device=image.device, dtype=motionvec.dtype),
+        torch.linspace(-1, 1, H, device=image.device, dtype=motionvec.dtype),
         indexing="xy"
     )
 
@@ -60,9 +60,11 @@ def op_extract_nz_features(image : torch.Tensor, scales=list[int]):
     # we disable gradient calculation because this is performed directly on the inputs and has no parameters
     # we don't want the backward pass keeping track of unnessary tensors
     with torch.no_grad():
-        lum = F.conv2d(image, weight=torch.ones(1, 3, 1, 1, device=image.device) / 3.0)
-        nonzero = (lum != 0).float()
+        lum = F.conv2d(image, weight=torch.ones(1, 3, 1, 1, device=image.device, dtype=image.dtype) / 3.0)
+        nonzero = (lum != 0)
 
+        nonzero = nonzero.half() if image.dtype == torch.half else nonzero.float()
+            
         nz_percentages = []
         nz_averages = []
 
@@ -86,6 +88,28 @@ def op_dbg_channel_stats(image: torch.Tensor):
 """
 Modules
 """
+
+class ImageLayerNorm(nn.Module):
+    """
+    Applies LayerNorm per-pixel on an image.
+    nn.LayerNorm cannot be directly used for this because it applies it to the last channels only.
+    This module under the hood permutes the image to apply nn.LayerNorn
+    """
+    def __init__(self, num_channels):
+        super(ImageLayerNorm, self).__init__()
+
+        self.layer_norm = nn.LayerNorm(num_channels)
+
+    def forward(self, x : torch.Tensor):
+        # (N, C, H, W) -> (N, H, W, C)
+        x = x.permute(0, 2, 3, 1)
+
+        x = self.layer_norm(x)
+
+        # (N, H, W, C) -> (N, C, H, W)
+        x = x.permute(0, 3, 1, 2)
+
+        return x
 
 class FeedForwardReLU(nn.Module):
     """
@@ -160,6 +184,46 @@ class GatedFormerBlock(nn.Module):
 
         return mlp
     
+class RestormerConvolutionBlock(nn.Module):
+    """
+    Based on the Gated-D convolutional block from Restormer paper
+    """
+    def __init__(self, channels_in, channels_out):
+        super(RestormerConvolutionBlock, self).__init__()
+
+        self.channels_in = channels_in
+        self.channels_out = channels_out
+
+        # depth-wise separable convolution
+        self.dws_conv = nn.Sequential(
+            nn.BatchNorm2d(channels_in),
+            nn.Conv2d(channels_in, channels_in * 2, kernel_size=1),
+            nn.BatchNorm2d(channels_in * 2),
+            nn.Conv2d(channels_in * 2, channels_in * 2, kernel_size=3, padding=1, groups=channels_in * 2)
+        )
+
+        self.ffn = nn.Sequential(
+            nn.BatchNorm2d(channels_in),
+            nn.Conv2d(channels_in, channels_out, kernel_size=1)
+        )
+
+        self.skip = nn.Sequential(
+            nn.BatchNorm2d(channels_in),
+            nn.Conv2d(channels_in, channels_out, kernel_size=1)
+        ) if self.channels_in != self.channels_out else None
+
+    def forward(self, x):
+        xp = self.dws_conv(x)
+
+        g = xp[:, :self.channels_in] * F.sigmoid(xp[:, self.channels_in:])
+
+        # haha this line starts off funny
+        s = x if self.channels_in == self.channels_out else self.skip(x)
+
+        f = self.ffn(g) + s
+
+        return f
+
 class DenseConvBlock(nn.Module):
     """
     Two back-to-back dense convolutions.
@@ -187,8 +251,8 @@ class UNetConvolutionBlock(nn.Module):
     def __init__(self, channels_in, channels_out, channels_in_extra, channels_out_extra, is_bottleneck):
         super(UNetConvolutionBlock, self).__init__()
 
-        self.encoder = DenseConvBlock(channels_in, channels_out)
-        self.decoder = DenseConvBlock(channels_in_extra + (channels_out if is_bottleneck else 2 * channels_out), channels_in + channels_out_extra)
+        self.encoder = GatedFormerBlock(channels_in, channels_out)
+        self.decoder = GatedFormerBlock(channels_in_extra + (channels_out if is_bottleneck else 2 * channels_out), channels_in + channels_out_extra)
 
     def encode(self, x):
         return self.encoder(x)
@@ -196,6 +260,21 @@ class UNetConvolutionBlock(nn.Module):
     def decode(self, x):
         return self.decoder(x)
 
+class UNetFastConvolutionBlock(nn.Module):
+    """
+    A general convolution block for U-Nets. This fast variant assumes you do not concatenate the skip connection.
+    """
+    def __init__(self, channels_in, channels_out):
+        super(UNetFastConvolutionBlock, self).__init__()
+
+        self.encoder = RestormerConvolutionBlock(channels_in, channels_out)
+        self.decoder = RestormerConvolutionBlock(channels_out, channels_in)
+
+    def encode(self, x):
+        return self.encoder(x)
+    
+    def decode(self, x):
+        return self.decoder(x)
 
 class LaplacianFilter(nn.Module):
     """
@@ -236,7 +315,9 @@ class LaplacianFilter(nn.Module):
 
             delta_bands = F.interpolate(
                 prev_level - F.avg_pool2d(filtered, kernel_size=2, stride=2),
-                size=filtered.shape[2:4]
+                size=filtered.shape[2:4],
+                mode="bilinear",
+                align_corners=True
             )
 
             filtered = filtered + delta_bands * (1.0 - alpha_c)
@@ -257,7 +338,7 @@ class UNetTransformerBlock(nn.Module):
     - Concatenate all QKV into one tensor and perform scaled dot-product attention.
     - Push V through a FFN to get our decoded latent. Concatenate the RGB back in. This vector now becomes input for next decoder layer and for next time step. 
     """
-    def __init__(self, channels_in, channels_out, is_bottleneck, window_size, band_size):
+    def __init__(self, channels_in, channels_out, is_bottleneck, window_size, band_size, latent_mode):
         super(UNetTransformerBlock, self).__init__()
 
         self.channels_in = channels_in
@@ -265,29 +346,29 @@ class UNetTransformerBlock(nn.Module):
         self.is_bottleneck = is_bottleneck
         self.window_size = window_size
         self.band_size = band_size
+        self.latent_mode = latent_mode
 
         # encoder block
-        self.encoder = DenseConvBlock(channels_in, channels_out)
+        self.encoder = GatedFormerBlock(channels_in, channels_out)
+
+        # subtract 3 because we will append radiance (only if latent_mode is false)
+        self.nonlatent_channels = 0 if self.latent_mode else 3
 
 
         # take current skip + upsampled and create new latent vector
         su_in = channels_out if self.is_bottleneck else channels_out * 2
         self.su_proj = nn.Sequential(
-            nn.BatchNorm2d(su_in),
-            nn.Conv2d(su_in, channels_in * 3 - 3, kernel_size=1) # subtract 3 because we will append radiance
+            ImageLayerNorm(su_in),
+            nn.Conv2d(su_in, channels_in * 3 - self.nonlatent_channels, kernel_size=1, bias=False) 
         )
 
-        # take in downsampled and create latent tokens
+        # take in downsampled and create kv only
         self.ds_proj = nn.Sequential(
-            nn.BatchNorm2d(channels_out),
-            nn.Conv2d(channels_out, channels_in * 2 - 3, kernel_size=1)
+            ImageLayerNorm(channels_out),
+            nn.Conv2d(channels_out, channels_in * 2 - self.nonlatent_channels, kernel_size=1, bias=False)
         ) if not self.is_bottleneck else None
-
-        self.qln = nn.LayerNorm(channels_in)
-        self.kln = nn.LayerNorm(channels_in)
-        self.vln = nn.LayerNorm(channels_in - 3)
         
-        self.ffn = FeedForwardReLU(channels_in, channels_in - 3, channel_multiplier=2)
+        self.ffn = FeedForwardReLU(channels_in, channels_in - self.nonlatent_channels, channel_multiplier=2)
 
     def encode(self, x):
         return self.encoder(x)
@@ -311,9 +392,13 @@ class UNetTransformerBlock(nn.Module):
 
 
         if not self.is_bottleneck:
-            ds_filtered = ds_latent[:, -3:, :, :]
+            ds_image = self.ds_proj(ds_latent) if self.latent_mode else torch.cat(
+                (self.ds_proj(ds_latent), ds_latent[:, -3:, :, :]), dim=1
+            )
+
+
             ds_embeddings = F.interpolate(
-                torch.cat((self.ds_proj(ds_latent), ds_filtered), dim=1),
+                ds_image,
                 size=skip_latent.shape[2:],
                 mode="bilinear",
                 align_corners=True
@@ -376,10 +461,16 @@ class UNetTransformerBlock(nn.Module):
         v = kv[:, :, :, self.channels_in:].flatten(0, 1)
 
         attn = F.scaled_dot_product_attention(
-            query=self.qln(q),
-            key=self.kln(k),
-            value=torch.cat((self.vln(v[:, :, :-3]), v[:, :, -3:]), dim=2)
-        ).unflatten(0, (N, -1))
+            query=q,
+            key=k,
+            value=v
+        )
+
+        if self.latent_mode:
+            attn = attn + q
+
+        # skip connection in latent mode
+        attn = attn.unflatten(0, (N, -1))
 
         return attn
     
@@ -402,7 +493,12 @@ class UNetTransformerBlock(nn.Module):
 
         # feedback loop without banding 
         temporal_kv = torch.cat((kv_image[:, :-3, :, :], img_attn[:, -3:, :, :]), dim=1)
-        decoded_latent = torch.cat((self.ffn(img_attn), img_attn[:, -3:, :, :]), dim=1)
+
+        ffn_out = self.ffn(img_attn)
+
+        decoded_latent = ffn_out + img_attn if self.latent_mode else torch.cat(
+            (ffn_out, img_attn[:, -3:, :, :]), dim=1
+        )
 
         return decoded_latent, temporal_kv
     
@@ -426,7 +522,10 @@ class UNetTransformerBlock(nn.Module):
             half_res=False
         )
 
-        kv_image = torch.cat((su_embeddings[:, self.channels_in:, :, :], radiance), dim=1)
+        kv_image = su_embeddings if self.latent_mode else torch.cat(
+            (su_embeddings[:, self.channels_in:, :, :], radiance), dim=1
+        )
+
         kv = self.tokenize(
             kv_image,
             banding=True,
@@ -464,7 +563,7 @@ class LaplacianUNet(nn.Module):
 
 
 
-    def forward(self, radiance, latent, motionvec, *hidden_states):
+    def forward(self, radiance, latent, motionvec, hidden_states):
         hidden_states = list(hidden_states)
 
         # encoder pass 
@@ -489,6 +588,7 @@ class LaplacianUNet(nn.Module):
 
         # decoder pass
         filtered = None
+        next_hidden_states = [None] * len(hidden_states)
         for i, level in reversed(list(enumerate(self.levels))):
             decoded_latent = checkpoint.checkpoint(
                 level.decode,
@@ -511,9 +611,9 @@ class LaplacianUNet(nn.Module):
             if not self.filters[i].predictor:
                 decoded_latent = decoded_latent[:, :-self.filters[i].num_ka_channels, :, :]
 
-            hidden_states[i] = filtered
+            next_hidden_states[i] = filtered
 
-        return filtered, decoded_latent, hidden_states
+        return filtered, decoded_latent, next_hidden_states
         
     def create_empty_hidden_state(self):
         return [None] * len(self.filters)
@@ -551,6 +651,7 @@ class LatentDiffusionNet(nn.Module):
             )
 
         # decoder pass
+        next_hidden_states = [None] * len(hidden_states)
         for i, level in reversed(list(enumerate(self.levels))):
             decoder_inputs = [
                 skip_tensors[i],
@@ -568,10 +669,10 @@ class LatentDiffusionNet(nn.Module):
                 use_reentrant=False
             )
 
-            hidden_states[i] = decoded_latent
+            next_hidden_states[i] = decoded_latent
 
         # add skip connection
-        return decoded_latent + latent
+        return decoded_latent + latent, next_hidden_states
         
     def create_empty_hidden_state(self):
         return [None] * len(self.levels)
@@ -620,6 +721,7 @@ class TransformerUNet(nn.Module):
 
         # decoder pass
         decoded_latent = None
+        next_hidden_states = [None] * len(hidden_states)
         for i, level in reversed(list(enumerate(self.levels))):
             decoded_latent, temporal_kv = checkpoint.checkpoint(
                 level.decode,
@@ -631,10 +733,119 @@ class TransformerUNet(nn.Module):
                 use_reentrant=False
             )
 
-            hidden_states[i] = temporal_kv
+            next_hidden_states[i] = temporal_kv
 
-        return decoded_latent[:, -3:, :, :], hidden_states
+        return decoded_latent[:, -3:, :, :], next_hidden_states
         
         
     def create_empty_hidden_state(self):
         return [None] * len(self.levels)
+    
+class GeneralPurposeUNet(nn.Module):
+    """
+    A generalized U-Net for anything really. 
+    """
+    def __init__(self, channels, per_level_outputs):
+        super(GeneralPurposeUNet, self).__init__()
+
+        # self.channels[0] corresponds to the input to the entire network
+        # self.channels[1...n] corresponds to the output of each encoder block
+        self.channels = channels
+        self.per_level_outputs = per_level_outputs
+
+        self.levels = nn.ModuleList([
+            UNetConvolutionBlock(
+                channels_in=self.channels[i - 1], 
+                channels_out=self.channels[i], 
+                channels_in_extra=0,
+                channels_out_extra=0,
+                is_bottleneck=(i == len(self.channels) - 1),
+            ) for i in range(1, len(self.channels))
+        ])
+
+
+
+    def forward(self, latent):
+        # encoder pass 
+        skip = []
+        for i, level in enumerate(self.levels):
+            skip.append(
+                checkpoint.checkpoint(
+                    level.encode,
+                    latent if i == 0 
+                    else F.max_pool2d(skip[i - 1], kernel_size=2, stride=2),
+                    use_reentrant=False
+                )
+            )
+
+        # decoder pass
+        outputs = [None] * len(self.levels)
+        for i, level in reversed(list(enumerate(self.levels))):
+            decoded = checkpoint.checkpoint(
+                level.decode,
+                skip[i] if i == len(self.levels) - 1 
+                else torch.cat((skip[i], F.interpolate(decoded, size=skip[i].shape[2:], mode="bilinear", align_corners=True)), dim=1),
+                use_reentrant=False
+            )
+
+            # add a skip connection at the very end
+            if i == 0:
+                decoded = decoded + latent
+
+            # do not increase the refcount if we are not going to return per-level outputs
+            # actually idk if python or pytorch will benefit from this
+            if self.per_level_outputs:
+                outputs[i] = decoded
+
+        return outputs if self.per_level_outputs else decoded
+    
+class FastUNet(nn.Module):
+    """
+    A generalized U-Net for anything really. 
+    """
+    def __init__(self, channels, per_level_outputs):
+        super(FastUNet, self).__init__()
+
+        # self.channels[0] corresponds to the input to the entire network
+        # self.channels[1...n] corresponds to the output of each encoder block
+        self.channels = channels
+        self.per_level_outputs = per_level_outputs
+
+        self.levels = nn.ModuleList([
+            UNetFastConvolutionBlock(
+                channels_in=self.channels[i - 1], 
+                channels_out=self.channels[i], 
+            ) for i in range(1, len(self.channels))
+        ])
+
+
+
+    def forward(self, latent):
+        # encoder pass 
+        skip = []
+        for i, level in enumerate(self.levels):
+            skip.append(
+                checkpoint.checkpoint(
+                    level.encode,
+                    latent if i == 0 
+                    else F.max_pool2d(skip[i - 1], kernel_size=2, stride=2),
+                    use_reentrant=False
+                )
+            )
+
+        # decoder pass
+        outputs = [None] * len(self.levels)
+        for i, level in reversed(list(enumerate(self.levels))):
+            decoded = checkpoint.checkpoint(
+                level.decode,
+                skip[i] if i == len(self.levels) - 1 
+                else skip[i] + F.interpolate(decoded, size=skip[i].shape[2:], mode="bilinear", align_corners=True),
+                use_reentrant=False
+            )
+
+            # do not increase the refcount if we are not going to return per-level outputs
+            # actually idk if python or pytorch will benefit from this
+            if self.per_level_outputs:
+                outputs[i] = decoded
+
+        return outputs if self.per_level_outputs else decoded
