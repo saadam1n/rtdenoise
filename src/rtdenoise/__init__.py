@@ -1,4 +1,5 @@
 import torch
+from . import _C
 
 from .models import laplacian_denoiser, single_frame_diffusion
 from .models.laplacian_denoiser import *

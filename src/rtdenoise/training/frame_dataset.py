@@ -48,6 +48,9 @@ class FrameDataset(Dataset):
 
         self.device=device
 
+        exr.set_default_channel_names(2, ["r", "g"])
+        os.makedirs(f"{os.environ['RTDENOISE_OUTPUT_PATH']}/cache", exist_ok=True)
+        os.makedirs(f"{os.environ['RTDENOISE_OUTPUT_PATH']}/test", exist_ok=True)
 
     def __len__(self):
         # length here is defined by the number of frame sequneces we have,

@@ -10,6 +10,7 @@ dependencies  = [
 
 [build-system]
 requires = [
-    "setuptools",
+    "setuptools>=42", 
+    "torch"
 ]
 build-backend = "setuptools.build_meta"
