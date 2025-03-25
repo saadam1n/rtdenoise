@@ -14,8 +14,10 @@ namespace rtdenoise {
         exit(-1);
     }
 
+    /*
     TORCH_LIBRARY_IMPL(rtdenoise, CUDA, m) {
         m.impl("kernel_attn", &kernel_attn_cuda);
     }
+    */
 
 }

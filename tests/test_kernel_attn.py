@@ -4,13 +4,20 @@ import rtdenoise.kernels as K
 import torch
 import torch.nn.functional as F
 
-qk = torch.randn(8, 24, 32, 32)
-v = torch.randn(8, 3, 32, 32)
+qk = torch.randn(8, 24, 32, 32, requires_grad=True)
+v = torch.randn(8, 3, 32, 32, requires_grad=True)
+
+qkr = qk.detach()
+vr = v.detach()
+
+qkr.requires_grad_()
+vr.requires_grad_()
+
 window_size = 3
 
-q_f = F.unfold(qk, kernel_size=1, stride=1).unflatten(1, (-1, 1)).permute(0, 3, 2, 1)
-k_f = F.unfold(qk, kernel_size=window_size, stride=1, padding=window_size // 2).unflatten(1, (-1, window_size ** 2)).permute(0, 3, 2, 1)
-v_f = F.unfold(v, kernel_size=window_size, stride=1, padding=window_size // 2).unflatten(1, (-1, window_size ** 2)).permute(0, 3, 2, 1)
+q_f = F.unfold(qkr, kernel_size=1, stride=1).unflatten(1, (-1, 1)).permute(0, 3, 2, 1)
+k_f = F.unfold(qkr, kernel_size=window_size, stride=1, padding=window_size // 2).unflatten(1, (-1, window_size ** 2)).permute(0, 3, 2, 1)
+v_f = F.unfold(vr, kernel_size=window_size, stride=1, padding=window_size // 2).unflatten(1, (-1, window_size ** 2)).permute(0, 3, 2, 1)
 
 
 a_ref = F.scaled_dot_product_attention(q_f, k_f, v_f).permute(0, 3, 2, 1).flatten(1, 2)
@@ -26,3 +33,13 @@ if torch.isnan(a_out).any():
 
 err = F.l1_loss(a_ref, a_out)
 print(f"L1 loss was {err}")
+
+print("\n\nBackwards tests")
+a_ref.sum().backward()
+a_out.sum().backward()
+
+errqk = F.l1_loss(qk.grad, qkr.grad)
+print(f"QK L1 loss was {errqk}")
+
+errv = F.l1_loss(v.grad, vr.grad)
+print(f"V L1 loss was {errv}")
