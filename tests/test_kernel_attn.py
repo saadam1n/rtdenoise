@@ -19,11 +19,13 @@ q_f = F.unfold(qkr, kernel_size=1, stride=1).unflatten(1, (-1, 1)).permute(0, 3,
 k_f = F.unfold(qkr, kernel_size=window_size, stride=1, padding=window_size // 2).unflatten(1, (-1, window_size ** 2)).permute(0, 3, 2, 1)
 v_f = F.unfold(vr, kernel_size=window_size, stride=1, padding=window_size // 2).unflatten(1, (-1, window_size ** 2)).permute(0, 3, 2, 1)
 
+k_f = torch.cat([k_f] * 3, dim=2)
+v_f = torch.cat([v_f] * 3, dim=2)
 
 a_ref = F.scaled_dot_product_attention(q_f, k_f, v_f).permute(0, 3, 2, 1).flatten(1, 2)
 a_ref = F.fold(a_ref, output_size=v.shape[2:], kernel_size=1, stride=1)
 
-a_out = K.kernel_attn(qk, v, window_size)
+a_out = K.kernel_attn(qk, v, qk, v, qk, v, window_size)
 
 if torch.isnan(a_ref).any():
     print("A Ref has NaN!")
