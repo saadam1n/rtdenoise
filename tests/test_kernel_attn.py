@@ -4,8 +4,8 @@ import rtdenoise.kernels as K
 import torch
 import torch.nn.functional as F
 
-qklist = [torch.randn(8, 24, 32, 32, requires_grad=True) for _ in range(3)]
-vlist = [torch.randn(8, 3, 32, 32, requires_grad=True) for _ in range(3)]
+qklist = [torch.randn(8, 24, 32, 32, requires_grad=True, device="cuda") for _ in range(3)]
+vlist = [torch.randn(8, 3, 32, 32, requires_grad=True, device="cuda") for _ in range(3)]
 
 qkrlist = [qk.detach().requires_grad_() for qk in qklist]
 vrlist = [v.detach().requires_grad_() for v in vlist]
