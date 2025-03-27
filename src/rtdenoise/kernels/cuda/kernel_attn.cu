@@ -109,7 +109,9 @@ namespace rtdenoise {
 
         // these writes do not need atomic adds
         for(int k = 0; k < 3; k++) {
-            a[n * 3 * H * W + k * H * W + y * W + x] = res.accum_a[k] / res.running_sum; 
+            float norm_color = res.accum_a[k] / res.running_sum;
+
+            a[n * 3 * H * W + k * H * W + y * W + x] = norm_color; 
         }
 
         if(L) {
@@ -191,7 +193,7 @@ namespace rtdenoise {
         int H = qk0.size(2);
         int W = qk0.size(3);
 
-        dim3 num_blocks((H + 31) / 32, (W + 31) / 32, N);
+        dim3 num_blocks((W + 31) / 32, (H + 31) / 32, N);
         dim3 block_size(32, 32, 1);
 
         kernel_attn_cuda_impl<float><<<num_blocks, block_size>>>(
@@ -416,7 +418,7 @@ namespace rtdenoise {
 
         float* dLdqk0_ptr = dLdqk0.data_ptr<float>();
         float* dLdqk1_ptr = dLdqk1.has_value() ? dLdqk1.value().data_ptr<float>() : nullptr;
-        float* dLdqk2_ptr = dLdqk1.has_value() ? dLdqk2.value().data_ptr<float>() : nullptr;
+        float* dLdqk2_ptr = dLdqk2.has_value() ? dLdqk2.value().data_ptr<float>() : nullptr;
 
         float* dLdv0_ptr = dLdv0.data_ptr<float>();
         float* dLdv1_ptr = dLdv1.has_value() ? dLdv1.value().data_ptr<float>() : nullptr;
@@ -427,7 +429,7 @@ namespace rtdenoise {
         int H = qk0.size(2);
         int W = qk0.size(3);
 
-        dim3 num_blocks((H + 31) / 32, (W + 31) / 32, N);
+        dim3 num_blocks((W + 31) / 32, (H + 31) / 32, N);
         dim3 block_size(32, 32, 1);
 
         kernel_attn_bwd_cuda_impl<float><<<num_blocks, block_size>>>(

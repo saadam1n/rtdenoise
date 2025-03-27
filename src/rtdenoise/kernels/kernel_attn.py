@@ -1,4 +1,5 @@
 import torch
+from torch.amp import custom_fwd, custom_bwd
 
 class KernelAttention(torch.autograd.Function):
     """
@@ -6,6 +7,7 @@ class KernelAttention(torch.autograd.Function):
     """
 
     @staticmethod
+    @custom_fwd(cast_inputs=torch.float32, device_type="cuda")
     def forward(
         ctx, 
         qk0 : torch.Tensor, v0 : torch.Tensor, 
@@ -37,6 +39,7 @@ class KernelAttention(torch.autograd.Function):
         return a
 
     @staticmethod
+    @custom_bwd(device_type="cuda")
     def backward(ctx, dLda : torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None]:
         qk0, v0, qk1, v1, qk2, v2,  L, m, a = ctx.saved_tensors
         window_size = ctx.window_size

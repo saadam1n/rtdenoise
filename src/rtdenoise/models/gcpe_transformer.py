@@ -6,6 +6,8 @@ import torch.utils.checkpoint as checkpoint
 from .base_denoiser import BaseDenoiser
 from .components import *
 
+from ..kernels import *
+
 import math
 
 class GlobalContextPreEncoderTransformer(BaseDenoiser):
@@ -142,133 +144,26 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
             segments=1
         )
 
-        q, k, v = checkpoint.checkpoint(
-            self.tokenize_everything,
-            color_fr,
-            qk_fr,
-            color_t,
-            qk_t,
-            color_ds,
-            qk_ds,
-            use_reentrant=False
+        if color_ds is not None:
+            color_ds = F.interpolate(
+                color_ds,
+                size=color_fr.shape[2:],
+                mode="bilinear",
+                align_corners=True
+            )
+
+            qk_ds = F.interpolate(
+                qk_ds,
+                size=qk_fr.shape[2:],
+                mode="bilinear",
+                align_corners=True
+            )
+
+        filtered = kernel_attn(
+            qk0=qk_fr, v0=color_fr, 
+            qk1=qk_t, v1=color_t, 
+            qk2=qk_ds, v2=color_ds,
+            window_size=self.window_size
         )
-
-        filtered = checkpoint.checkpoint(self.perform_spda, q, k, v, use_reentrant=False)
-
-        filtered = checkpoint.checkpoint(self.reformt_results, filtered, color_fr.shape[2:], use_reentrant=False)
 
         return filtered, qk_fr
-
-    def tokenize_everything(
-            self,
-            color_fr, 
-            qk_fr, 
-            color_t,
-            qk_t,
-            color_ds, 
-            qk_ds
-        ):
-        q = self.tokenize(qk_fr, banding=False)
-        k = self.tokenize(qk_fr, banding=True)
-        v = self.tokenize(color_fr, banding=True)
-
-        if color_t is not None:
-            # we want more performance, so we don't band here
-            k = torch.cat((k, self.tokenize(qk_t, banding=False)), dim=2)
-            v = torch.cat((v, self.tokenize(color_t, banding=False)), dim=2)
-
-        if color_ds is not None:
-            # upsample color_ds and qk_ds
-            color_ds = F.interpolate(color_ds, size=color_fr.shape[2:], mode="bilinear", align_corners=True)
-            qk_ds = F.interpolate(qk_ds, size=qk_fr.shape[2:], mode="bilinear", align_corners=True)
-
-            k = torch.cat(
-                (k, self.tokenize(qk_ds, banding=True)), 
-                dim=2
-            )
-
-            v = torch.cat(
-                (v, self.tokenize(color_ds, banding=True)), 
-                dim=2
-            )
-
-        return q, k, v
-
-    # technical debt goes hard
-    # I copy pasted this instead of taking time to genearlize my code
-    def tokenize(self, image : torch.Tensor, banding : bool):
-        bs = self.band_size if banding else 0
-
-        # use matrix notation to refer to dimensions
-        ipad = self.pd_size(image.shape[2]) - image.shape[2]
-        jpad = self.pd_size(image.shape[3]) - image.shape[3]
-
-        padded_image = F.pad(image, pad=(0, jpad, 0, ipad), mode="constant", value=0)
-
-        # (N, C * k * k, L) ->
-        # (N, C, k * k, L) ->
-        # (N, L, k * k, C) ->
-        # (N, L, k * k, C)
-        tiles = F.unfold(
-            padded_image, 
-            kernel_size=self.window_size + 2 * bs, 
-            stride=self.window_size, 
-            padding=bs
-        ).unflatten(
-            1, 
-            (-1, (self.window_size + 2 * bs) ** 2)
-        ).permute(
-            0, 3, 2, 1
-        )
-
-        return tiles
-
-    def perform_spda(self, q : torch.Tensor, k : torch.Tensor, v : torch.Tensor):
-        N, _, _, _ = q.shape
-
-        # we need to flatten the tensors 
-        # torch's spda implementation does some weird things with attention heads
-        # rather than viewing attention heads as something independent (like the batch dim), torch does some 
-        # weird optimization that breaks when you have many heads (>60k) 
-        q = q.flatten(0, 1)
-        k = k.flatten(0, 1)
-        v = v.flatten(0, 1)
-
-        if self.manual_spda:
-            qkT_d = torch.matmul(q, k.transpose(1, 2)  / math.sqrt(self.num_transformer_channels))
-            weights = F.softmax(qkT_d, dim=2)
-            attn = torch.matmul(weights, v)
-        else:
-
-            attn = F.scaled_dot_product_attention(
-                query=q,
-                key=k,
-                value=v
-            )
-
-        # skip connection in latent mode
-        attn = attn.unflatten(0, (N, -1))
-
-        return attn
-    
-    def reformt_results(self, attn, shape):
-        # convert attn back to an image using fold
-        # (N, L, k * k, C) ->
-        # (N, C, k * k, L) ->
-        # (N, C * k * k, L)
-        img_attn = F.fold(
-            attn.permute(0, 3, 2, 1).flatten(1, 2), 
-            output_size=(
-                self.pd_size(shape[0]),
-                self.pd_size(shape[1])
-            ),
-            kernel_size=self.window_size,
-            stride=self.window_size
-        )
-
-        img_attn = img_attn[:, :, :shape[0], :shape[1]]
-
-        return img_attn
-    
-    def pd_size(self, dim):
-        return self.window_size * ((dim - 1) // self.window_size + 1)
