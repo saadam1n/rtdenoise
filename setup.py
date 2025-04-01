@@ -1,6 +1,24 @@
 from setuptools import setup, find_packages
 from torch.utils.cpp_extension import CUDAExtension, BuildExtension
 
+import os
+
+# Define the target CUDA architectures
+cuda_architectures = [
+    #'3.5',  # Kepler
+    #'5.0',  # Maxwell
+    '6.0',  # Pascal
+    '7.0',  # Volta
+    '7.5',  # Turing
+    '8.0',  # Ampere
+    '8.6',  # Ampere
+    '8.9',  # Ada
+    '9.0',  # Hopper
+]
+
+# Set the TORCH_CUDA_ARCH_LIST environment variable
+os.environ['TORCH_CUDA_ARCH_LIST'] = ';'.join(cuda_architectures)
+
 setup(
     name='rtdenoise',
     version='0.1.0',
