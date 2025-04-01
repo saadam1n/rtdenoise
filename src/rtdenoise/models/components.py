@@ -198,6 +198,7 @@ class RestormerConvolutionBlock(nn.Module):
         self.dws_conv = nn.Sequential(
             nn.BatchNorm2d(channels_in),
             nn.Conv2d(channels_in, channels_in * 2, kernel_size=1),
+            nn.GELU(),
             nn.BatchNorm2d(channels_in * 2),
             nn.Conv2d(channels_in * 2, channels_in * 2, kernel_size=3, padding=1, groups=channels_in * 2)
         )
@@ -264,11 +265,11 @@ class UNetFastConvolutionBlock(nn.Module):
     """
     A general convolution block for U-Nets. This fast variant assumes you do not concatenate the skip connection.
     """
-    def __init__(self, channels_in, channels_out):
+    def __init__(self, channels_in, channels_out, bottleneck):
         super(UNetFastConvolutionBlock, self).__init__()
 
         self.encoder = RestormerConvolutionBlock(channels_in, channels_out)
-        self.decoder = RestormerConvolutionBlock(channels_out, channels_in)
+        self.decoder = RestormerConvolutionBlock(channels_out * (1 if bottleneck else 2), channels_in)
 
     def encode(self, x):
         return self.encoder(x)
@@ -815,6 +816,7 @@ class FastUNet(nn.Module):
             UNetFastConvolutionBlock(
                 channels_in=self.channels[i - 1], 
                 channels_out=self.channels[i], 
+                bottleneck=(i+1) == len(self.channels)
             ) for i in range(1, len(self.channels))
         ])
 
@@ -839,7 +841,7 @@ class FastUNet(nn.Module):
             decoded = checkpoint.checkpoint(
                 level.decode,
                 skip[i] if i == len(self.levels) - 1 
-                else skip[i] + F.interpolate(decoded, size=skip[i].shape[2:], mode="bilinear", align_corners=True),
+                else self.skip_combine_func(skip[i], decoded),
                 use_reentrant=False
             )
 
@@ -849,3 +851,10 @@ class FastUNet(nn.Module):
                 outputs[i] = decoded
 
         return outputs if self.per_level_outputs else decoded
+    
+    def skip_combine_func(self, skip, decoded):
+        decoded = F.interpolate(decoded, size=skip.shape[2:], mode="bilinear", align_corners=True)
+        if False:
+            return skip[i] + decoded
+        else:
+            return torch.cat((skip, decoded), dim=1)

@@ -10,43 +10,63 @@ from ..kernels import *
 
 import math
 
+# we take some inspiration from restormer for this one
+class QueryKeyExtractor(nn.Module):
+    def __init__(self, channels_in, transformer_channels, is_bottleneck):
+        super(QueryKeyExtractor, self).__init__()
+
+        output_channels = transformer_channels * (1 if is_bottleneck else 2)
+        print(f"Is? {channels_in} {is_bottleneck} {output_channels}")
+
+        self.qke = nn.Sequential(
+            nn.Conv2d(channels_in, channels_in, kernel_size=1),
+            nn.GELU(),
+            nn.Conv2d(channels_in, channels_in, kernel_size=3, padding=1, groups=channels_in),
+            nn.GELU(),
+            ImageLayerNorm(channels_in),
+            nn.Conv2d(channels_in, output_channels, kernel_size=1, bias=False)
+        )
+
+
+    def forward(self, x):
+        return self.qke(x)
+    
+    
+
 class GlobalContextPreEncoderTransformer(BaseDenoiser):
     def init_components(self):
         self.num_internal_channels = 24
-        self.num_transformer_channels = 24
+        self.num_transformer_channels = 8
         self.unet_channels = [self.num_internal_channels, 24, 24, 32, 32, 48, 64]
         self.num_filtering_scales = len(self.unet_channels) - 1
 
         self.nz_scales = [5, 11, 17, 29]
 
         # analagous to a 3x3 kernel
-        self.window_size = 1
-        self.band_size = 1
-        self.manual_spda = False
+        self.window_size = 5
 
         # concate previous frame input and ignore motion vectors
-        self.true_num_input_channels = (self.num_input_channels - 2) * 2 + len(self.nz_scales) * 2
+        self.true_num_input_channels = (9) * 2 + len(self.nz_scales) * 2
         self.projector = nn.Sequential(
             nn.BatchNorm2d(self.true_num_input_channels),
             RestormerConvolutionBlock(self.true_num_input_channels, self.num_internal_channels)
         )
 
         self.encoder_net = nn.Sequential(
-            FastUNet(channels=self.unet_channels, per_level_outputs=False),
-            FastUNet(channels=self.unet_channels, per_level_outputs=False),
+            #FastUNet(channels=self.unet_channels, per_level_outputs=False),
             FastUNet(channels=self.unet_channels, per_level_outputs=True)
         )
 
         self.qk_extractors = nn.ModuleList([ 
-            nn.Sequential(
-                ImageLayerNorm(self.unet_channels[i]),
-                nn.Conv2d(self.unet_channels[i], self.num_transformer_channels, kernel_size=1, bias=False)
-            ) for i in range(self.num_filtering_scales)
+            QueryKeyExtractor(
+                channels_in=self.unet_channels[i], 
+                transformer_channels=self.num_transformer_channels,
+                is_bottleneck=(i + 1 == self.num_filtering_scales)
+            )
+            for i in range(self.num_filtering_scales)
         ])
-
-        with torch.no_grad():
-            for seq in self.qk_extractors:
-                seq[1].weight.mul_(0.05)
+            
+        self.qk_us_mult = 4
 
 
     def run_frame(self, frame_input : torch.Tensor, temporal_state):
@@ -59,9 +79,9 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
         albedo = frame_input[:, 3:6, :, :]
 
         input = frame_input[:, :9, :, :]
-        motionvec = frame_input[:, 9:, :, :]
+        motionvec = frame_input[:, 13:, :, :]
     
-        if temporal_state is None:
+        if temporal_state is None or True:
             prev_input = torch.zeros_like(input)
             hidden_state = [None] * self.num_filtering_scales
         else:
@@ -91,7 +111,7 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
 
         filter_outputs = checkpoint.checkpoint(self.hierarchical_filter, color, qk_latent, hidden_state, use_reentrant=False)
 
-        filtered = filter_outputs[0][0]
+        filtered = filter_outputs[0]
 
         denoised = albedo * filtered
         next_temporal_state = (torch.cat((filtered, input[:, 3:, :, :]), dim=1), filter_outputs)
@@ -109,9 +129,8 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
         outputs = [None] * self.num_filtering_scales
 
         color_ds = None
-        qk_ds = None
         for i in range(self.num_filtering_scales - 1, -1, -1):
-            color_ds, qk_ds = checkpoint.checkpoint(
+            color_ds = checkpoint.checkpoint(
                 self.transformer_filter,
                 ds_color[i],
                 qk_latent[i],
@@ -119,11 +138,10 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
                 hidden_state[i][1] if hidden_state[i] else None,
                 i,
                 color_ds,
-                qk_ds,
                 use_reentrant=False
             )
 
-            outputs[i] = (color_ds, qk_ds)
+            outputs[i] = color_ds
 
         return outputs
 
@@ -134,14 +152,12 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
         color_t,
         qk_t,
         extractor_index, 
-        color_ds, 
-        qk_ds
+        color_ds 
     ):
-        qk_fr = checkpoint.checkpoint_sequential(
+        qk_fr = checkpoint.checkpoint(
             self.qk_extractors[extractor_index], 
-            input=qk_latent_fr, 
+            qk_latent_fr, 
             use_reentrant=False,
-            segments=1
         )
 
         if color_ds is not None:
@@ -152,18 +168,17 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
                 align_corners=True
             )
 
-            qk_ds = F.interpolate(
-                qk_ds,
-                size=qk_fr.shape[2:],
-                mode="bilinear",
-                align_corners=True
-            )
+            # extract this first
+            qk_ds = qk_fr[:, self.num_transformer_channels:]
+            qk_fr = qk_fr[:, :self.num_transformer_channels]
+        else:
+            qk_ds = None
 
         filtered = kernel_attn(
             qk0=qk_fr, v0=color_fr, 
-            qk1=qk_t, v1=color_t, 
+            qk1=qk_t , v1=color_t, 
             qk2=qk_ds, v2=color_ds,
             window_size=self.window_size
         )
 
-        return filtered, qk_fr
+        return filtered

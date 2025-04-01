@@ -53,10 +53,10 @@ class PrebatchedDataset(torch.utils.data.Dataset):
         tensors = torch.load(download_path, weights_only=True)
         os.remove(download_path)
 
-        seq_in = tensors["seq_in"]
-        seq_ref = tensors["seq_ref"]
+        seq_in = tensors["sqi"]
+        seq_ref = tensors["sqr"]
 
-        if (self.truncated_batch_size is not None) and (not self.fullres):
+        if (self.truncated_batch_size is not None) and (not self.fullres) and seq_in.shape[0] >= self.truncated_batch_size:
             seq_in = seq_in[:self.truncated_batch_size]
             seq_ref = seq_ref[:self.truncated_batch_size]
 

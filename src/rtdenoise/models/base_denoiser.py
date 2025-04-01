@@ -9,44 +9,51 @@ class BaseDenoiser(nn.Module):
     def __init__(self):
         super().__init__()
 
-        # ideally we want to fix the number of auxiliary features globally 
-        self.num_aux_channels = 8
-        self.num_input_channels = self.num_aux_channels + 3
-
         self.init_components()
 
     def init_components(self):
         raise RuntimeError("init_components method for denoise is not implemented!")
 
     def forward(self, input : torch.Tensor):
-        B = input.size(0)
-        num_frames = input.size(1) // self.num_input_channels
-        H = input.size(2)
-        W = input.size(3)
+        # Input shape is (N, L, C, H, W)
 
-        output = torch.empty(B, 3 * num_frames, H, W, device=input.device, dtype=input.dtype)
+        L = input.size(1)
+
+        output = []
         temporal_state = None
 
-        for i in range(num_frames):
-
-            base_channel_index = i * self.num_input_channels
-
-            frame_input = input[:, base_channel_index:base_channel_index + self.num_input_channels, :, :]
+        for i in range(L):
+            # take a slice out of input
+            # receive (N, C, H, W) tensor in return
+            frame_input = input[:, i, :, :, :]
 
             (frame_output, next_temporal_state) = checkpoint.checkpoint(self.run_frame, frame_input, temporal_state, use_reentrant=False)
 
-            oidx = i * 3
-            output[:, oidx:oidx + 3, :, :] = frame_output
+            output.append(frame_output)
 
             temporal_state = next_temporal_state
+
+        # output is list of (N, 3, H, W) tensor
+        # stack it and produce (N, L, 3, H, W)
+        output = torch.stack(output, dim=1)
 
         return output
 
 
 
     """
+    run_frame must not modify any of the arguments! 
+
+    Frame input formats:
+        0:3     raw color
+        3:6     albedo
+        6:9     normal
+        9:12    position
+        12:13   depth
+        13:15   motionvec
+
     Below is the framework for implementing your own denoiser:
-        B = frame_input.size(0)
+        N = frame_input.size(0)
         H = frame_input.size(2)
         W = frame_input.size(3)
 

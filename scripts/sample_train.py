@@ -37,7 +37,7 @@ if __name__ == "__main__":
         num_workers = 2
         prefetch_factor = 2
         truncated_batch_size = 8
-        num_epochs = 8
+        num_epochs = 64
 
 
     dataset = rtdenoise.PrebatchedDataset(os.environ['RTDENOISE_DATASET_PATH'], buffers=["color", "albedo", "normal", "motionvec"], truncated_batch_size=truncated_batch_size)
@@ -53,12 +53,11 @@ if __name__ == "__main__":
     ]
 
     parallel_models = [
-        #torch.nn.DataParallel(model.to(device)) for model in models
-        model.to(device) for model in models
+        torch.nn.DataParallel(model.to(device)) for model in models
     ]
 
     optimizers = [
-        torch.optim.Adam(model.parameters(), lr=0.0005) for model in parallel_models
+        torch.optim.Adam(model.parameters(), lr=0.001) for model in parallel_models
     ]
 
     schedulers = [
