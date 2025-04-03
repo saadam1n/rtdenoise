@@ -49,9 +49,9 @@ def op_warp_tensor(image : torch.Tensor, motionvec : torch.Tensor):
         dim=3
     )
 
-    warped_image = F.grid_sample(image, sample_positons, mode="bilinear", padding_mode="border", align_corners=True)
+    warped_image = F.grid_sample(image, sample_positons, mode="bilinear", padding_mode="border", align_corners=False)
 
-    resized_warped_image = F.interpolate(warped_image, size=(H2, W2), mode="bilinear", align_corners=True)
+    resized_warped_image = F.interpolate(warped_image, size=(H2, W2), mode="bilinear", align_corners=False)
 
     return resized_warped_image
 
@@ -318,7 +318,7 @@ class LaplacianFilter(nn.Module):
                 prev_level - F.avg_pool2d(filtered, kernel_size=2, stride=2),
                 size=filtered.shape[2:4],
                 mode="bilinear",
-                align_corners=True
+                align_corners=False
             )
 
             filtered = filtered + delta_bands * (1.0 - alpha_c)
@@ -402,7 +402,7 @@ class UNetTransformerBlock(nn.Module):
                 ds_image,
                 size=skip_latent.shape[2:],
                 mode="bilinear",
-                align_corners=True
+                align_corners=False
             )
 
             ds_kv = self.tokenize(
@@ -508,7 +508,7 @@ class UNetTransformerBlock(nn.Module):
             ds_latent, 
             size=skip_latent.shape[2:], 
             mode="bilinear", 
-            align_corners=True
+            align_corners=False
         ) if not self.is_bottleneck else None
 
         su_embeddings = self.su_proj(
@@ -594,7 +594,7 @@ class LaplacianUNet(nn.Module):
             decoded_latent = checkpoint.checkpoint(
                 level.decode,
                 skip_tensors[i] if i == len(self.levels) - 1 
-                else torch.cat((skip_tensors[i], F.interpolate(decoded_latent, size=skip_tensors[i].shape[2:4], mode="bilinear", align_corners=True)), dim=1),
+                else torch.cat((skip_tensors[i], F.interpolate(decoded_latent, size=skip_tensors[i].shape[2:4], mode="bilinear", align_corners=False)), dim=1),
                 use_reentrant=False
             )
 
@@ -661,7 +661,7 @@ class LatentDiffusionNet(nn.Module):
 
             if i != len(self.levels) - 1:
                 decoder_inputs.append(
-                    F.interpolate(decoded_latent, size=skip_tensors[i].shape[2:4], mode="bilinear", align_corners=True)
+                    F.interpolate(decoded_latent, size=skip_tensors[i].shape[2:4], mode="bilinear", align_corners=False)
                 )
 
             decoded_latent = checkpoint.checkpoint(
@@ -785,7 +785,7 @@ class GeneralPurposeUNet(nn.Module):
             decoded = checkpoint.checkpoint(
                 level.decode,
                 skip[i] if i == len(self.levels) - 1 
-                else torch.cat((skip[i], F.interpolate(decoded, size=skip[i].shape[2:], mode="bilinear", align_corners=True)), dim=1),
+                else torch.cat((skip[i], F.interpolate(decoded, size=skip[i].shape[2:], mode="bilinear", align_corners=False)), dim=1),
                 use_reentrant=False
             )
 
@@ -853,7 +853,7 @@ class FastUNet(nn.Module):
         return outputs if self.per_level_outputs else decoded
     
     def skip_combine_func(self, skip, decoded):
-        decoded = F.interpolate(decoded, size=skip.shape[2:], mode="bilinear", align_corners=True)
+        decoded = F.interpolate(decoded, size=skip.shape[2:], mode="bilinear", align_corners=False)
         if False:
             return skip[i] + decoded
         else:

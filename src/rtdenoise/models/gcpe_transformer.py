@@ -164,14 +164,14 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
                 color_ds,
                 size=color_fr.shape[2:],
                 mode="bilinear",
-                align_corners=True
+                align_corners=False
             )
 
             qk_ds = F.interpolate(
                 qk_ds,
                 size=qk_fr.shape[2:],
                 mode="bilinear",
-                align_corners=True
+                align_corners=False
             )
         else:
             qk_ds = None

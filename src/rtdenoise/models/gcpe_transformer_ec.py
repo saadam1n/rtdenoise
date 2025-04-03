@@ -160,8 +160,8 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
 
         if color_ds is not None:
             # upsample color_ds and qk_ds
-            color_ds = F.interpolate(color_ds, size=color_fr.shape[2:], mode="bilinear", align_corners=True)
-            qk_ds = F.interpolate(qk_ds, size=qk_fr.shape[2:], mode="bilinear", align_corners=True)
+            color_ds = F.interpolate(color_ds, size=color_fr.shape[2:], mode="bilinear", align_corners=False)
+            qk_ds = F.interpolate(qk_ds, size=qk_fr.shape[2:], mode="bilinear", align_corners=False)
 
             qk_ds_tok = self.tokenize(qk_ds, banding=True)
             color_ds_tok = self.tokenize(color_ds, banding=not self.kernel_mode)
