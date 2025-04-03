@@ -42,6 +42,7 @@ namespace rtdenoise {
     void kernel_attn_cpu_pixel(
         int C, int H, int W, 
         int kernel_size, 
+        int skip_center,
         int y, int x,  
         const T* q, 
         const T* k, 
@@ -53,6 +54,10 @@ namespace rtdenoise {
 
         for(int i = y - hks; i <= y + hks; i++) {
             for(int j = x - hks; j <= x + hks; j++) {
+
+                if(skip_center && i == y && j == x) {
+                    continue;
+                }
 
                 bool is_inside = (i >= 0 && j >= 0 && i < H && j < W);
 
@@ -90,6 +95,7 @@ namespace rtdenoise {
     void kernel_attn_cpu_impl(
         int N, int C, int H, int W, 
         int kernel_size, 
+        int skip_center,
         const T* qk0, const T* v0, 
         const T* qk1, const T* v1, 
         const T* qk2, const T* v2, 
@@ -113,6 +119,7 @@ namespace rtdenoise {
                         kernel_attn_cpu_pixel(
                             C, H, W, 
                             kernel_size, 
+                            b == 0 ? skip_center : 0,
                             y, x,
                             &qk0[n * C * H * W],
                             &klist[b][n * C * H * W],
@@ -141,7 +148,10 @@ namespace rtdenoise {
 
     template<typename T>
     void kernel_attn_bwd_cpu_pixel(
-        int C, int H, int W, int kernel_size, int y, int x,
+        int C, int H, int W, 
+        int kernel_size, 
+        int skip_center,
+        int y, int x,
         const T* q, const T* k, const T* v, 
         KernelAttnResultCPU<T>& res,
         const T* dLda, 
@@ -162,6 +172,10 @@ namespace rtdenoise {
 
         for(int i = y - hks; i <= y + hks; i++) {
             for(int j = x - hks; j <= x + hks; j++) {
+
+                if(skip_center && i == y && j == x) {
+                    continue;
+                }
 
                 bool is_inside = (i >= 0 && j >= 0 && i < H && j < W);
 
@@ -209,7 +223,8 @@ namespace rtdenoise {
 
     template<typename T>
     void kernel_attn_bwd_cpu_impl(
-        int N, int C, int H, int W, int kernel_size, 
+        int N, int C, int H, int W, 
+        int kernel_size, int skip_center,
         const T* qk0, const T* v0, 
         const T* qk1, const T* v1, 
         const T* qk2, const T* v2, 
@@ -247,6 +262,7 @@ namespace rtdenoise {
                         kernel_attn_bwd_cpu_pixel<T>(
                             C, H, W, 
                             kernel_size, 
+                            b == 0 ? skip_center : 0,
                             y, x,
                             &qk0[n * C * H * W],
                             &klist[b][n * C * H * W],
@@ -271,7 +287,7 @@ namespace rtdenoise {
         at::Tensor qk0, at::Tensor v0, 
         c10::optional<at::Tensor> qk1, c10::optional<at::Tensor> v1,
         c10::optional<at::Tensor> qk2, c10::optional<at::Tensor> v2,
-        int64_t kernel_size, 
+        int64_t kernel_size, int64_t skip_center,
         c10::optional<at::Tensor> L, c10::optional<at::Tensor> m
     ) {
         // check if the sizes are valid
@@ -336,6 +352,7 @@ namespace rtdenoise {
             qk0.size(2), 
             qk0.size(3), 
             kernel_size, 
+            skip_center,
             qk0_ptr, 
             v0_ptr, 
             qk1_ptr, 
@@ -354,7 +371,7 @@ namespace rtdenoise {
         at::Tensor qk0, at::Tensor v0, 
         c10::optional<at::Tensor> qk1, c10::optional<at::Tensor> v1,
         c10::optional<at::Tensor> qk2, c10::optional<at::Tensor> v2,
-        int64_t kernel_size, 
+        int64_t kernel_size, int64_t skip_center,
         at::Tensor L, at::Tensor m,
         at::Tensor a,
         at::Tensor dLda, 
@@ -434,6 +451,7 @@ namespace rtdenoise {
             qk0.size(2), 
             qk0.size(3), 
             kernel_size, 
+            skip_center,
             qk0_ptr, 
             v0_ptr, 
             qk1_ptr, 
@@ -459,7 +477,7 @@ namespace rtdenoise {
                 "Tensor qk0, Tensor v0, "
                 "Tensor? qk1, Tensor? v1, "
                 "Tensor? qk2, Tensor? v2, "
-                "int kernel_size, "
+                "int kernel_size, int skip_center,"
                 "Tensor? L, Tensor? m"
             ") -> Tensor"
         );
@@ -469,7 +487,7 @@ namespace rtdenoise {
                 "Tensor qk0, Tensor v0, "
                 "Tensor? qk1, Tensor? v1, "
                 "Tensor? qk2, Tensor? v2, "
-                "int kernel_size, "
+                "int kernel_size, int skip_center,"
                 "Tensor L, Tensor m, "
                 "Tensor a, "
                 "Tensor dLda, "

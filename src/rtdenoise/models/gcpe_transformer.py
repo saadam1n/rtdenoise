@@ -12,19 +12,12 @@ import math
 
 # we take some inspiration from restormer for this one
 class QueryKeyExtractor(nn.Module):
-    def __init__(self, channels_in, transformer_channels, is_bottleneck):
+    def __init__(self, channels_in, transformer_channels):
         super(QueryKeyExtractor, self).__init__()
 
-        output_channels = transformer_channels * (1 if is_bottleneck else 2)
-        print(f"Is? {channels_in} {is_bottleneck} {output_channels}")
-
         self.qke = nn.Sequential(
-            nn.Conv2d(channels_in, channels_in, kernel_size=1),
-            nn.GELU(),
-            nn.Conv2d(channels_in, channels_in, kernel_size=3, padding=1, groups=channels_in),
-            nn.GELU(),
             ImageLayerNorm(channels_in),
-            nn.Conv2d(channels_in, output_channels, kernel_size=1, bias=False)
+            nn.Conv2d(channels_in, transformer_channels, kernel_size=1, bias=False)
         )
 
 
@@ -57,17 +50,15 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
             FastUNet(channels=self.unet_channels, per_level_outputs=True)
         )
 
+        self.ignore_center = False
+
         self.qk_extractors = nn.ModuleList([ 
             QueryKeyExtractor(
                 channels_in=self.unet_channels[i], 
-                transformer_channels=self.num_transformer_channels,
-                is_bottleneck=(i + 1 == self.num_filtering_scales)
+                transformer_channels=self.num_transformer_channels + (1 if self.ignore_center else 0),
             )
             for i in range(self.num_filtering_scales)
         ])
-            
-        self.qk_us_mult = 4
-
 
     def run_frame(self, frame_input : torch.Tensor, temporal_state):
         N = frame_input.size(0)
@@ -113,7 +104,8 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
 
         filtered = filter_outputs[0]
 
-        denoised = albedo * filtered
+        # apply gamma correction to albedo before modulating it back in
+        denoised = albedo.pow(1.0 / 2.2) * filtered
         next_temporal_state = (torch.cat((filtered, input[:, 3:, :, :]), dim=1), filter_outputs)
 
         return (denoised, next_temporal_state)
@@ -129,8 +121,9 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
         outputs = [None] * self.num_filtering_scales
 
         color_ds = None
+        qk_ds = None
         for i in range(self.num_filtering_scales - 1, -1, -1):
-            color_ds = checkpoint.checkpoint(
+            color_ds, qk_ds = checkpoint.checkpoint(
                 self.transformer_filter,
                 ds_color[i],
                 qk_latent[i],
@@ -138,6 +131,7 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
                 hidden_state[i][1] if hidden_state[i] else None,
                 i,
                 color_ds,
+                qk_ds,
                 use_reentrant=False
             )
 
@@ -152,13 +146,18 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
         color_t,
         qk_t,
         extractor_index, 
-        color_ds 
+        color_ds,
+        qk_ds
     ):
         qk_fr = checkpoint.checkpoint(
             self.qk_extractors[extractor_index], 
             qk_latent_fr, 
             use_reentrant=False,
         )
+
+        if self.ignore_center:
+            center_weight = F.sigmoid(qk_fr[:, :1])
+            qk_fr = qk_fr[:, 1:]
 
         if color_ds is not None:
             color_ds = F.interpolate(
@@ -168,9 +167,12 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
                 align_corners=True
             )
 
-            # extract this first
-            qk_ds = qk_fr[:, self.num_transformer_channels:]
-            qk_fr = qk_fr[:, :self.num_transformer_channels]
+            qk_ds = F.interpolate(
+                qk_ds,
+                size=qk_fr.shape[2:],
+                mode="bilinear",
+                align_corners=True
+            )
         else:
             qk_ds = None
 
@@ -178,7 +180,11 @@ class GlobalContextPreEncoderTransformer(BaseDenoiser):
             qk0=qk_fr, v0=color_fr, 
             qk1=qk_t , v1=color_t, 
             qk2=qk_ds, v2=color_ds,
-            window_size=self.window_size
+            window_size=self.window_size,
+            skip_center=True
         )
 
-        return filtered
+        if self.ignore_center:
+            filtered = center_weight * color_fr + (1.0 - center_weight) * filtered
+
+        return filtered, qk_fr

@@ -17,7 +17,7 @@ class LaplacianDenoiser(BaseDenoiser):
         self.nz_scales = [5, 11, 17, 29]
 
         # concate previous frame input and ignore motion vectors
-        self.true_num_input_channels = (self.num_input_channels - 2) * 2 + len(self.nz_scales) * 2
+        self.true_num_input_channels = (9) * 2 + len(self.nz_scales) * 2
         self.projector = nn.Sequential(
             nn.BatchNorm2d(self.true_num_input_channels),
             nn.Conv2d(self.true_num_input_channels, self.num_internal_channels, kernel_size=1)
@@ -32,13 +32,13 @@ class LaplacianDenoiser(BaseDenoiser):
         W = frame_input.size(3)
 
         # albedo is channels 3..5
-        color = frame_input[:, :3, :, :]
+        color = frame_input[:, 0:3, :, :]
         albedo = frame_input[:, 3:6, :, :]
 
         input = frame_input[:, :9, :, :]
-        motionvec = frame_input[:, 9:, :, :]
+        motionvec = frame_input[:, 13:, :, :]
     
-        if temporal_state is None:
+        if temporal_state is None or True:
             prev_input = torch.zeros_like(input)
             hidden_state = self.l_unet.create_empty_hidden_state()
         else:
@@ -54,7 +54,7 @@ class LaplacianDenoiser(BaseDenoiser):
         )
 
 
-        filtered, _, hidden_state = self.l_unet(color, latent_features, motionvec, *hidden_state)
+        filtered, _, hidden_state = self.l_unet(color, latent_features, motionvec, hidden_state)
         denoised = albedo * filtered
         temporal_state = (torch.cat((filtered, input[:, 3:, :, :]), dim=1), hidden_state)
 

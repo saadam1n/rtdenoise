@@ -268,8 +268,8 @@ class UNetFastConvolutionBlock(nn.Module):
     def __init__(self, channels_in, channels_out, bottleneck):
         super(UNetFastConvolutionBlock, self).__init__()
 
-        self.encoder = RestormerConvolutionBlock(channels_in, channels_out)
-        self.decoder = RestormerConvolutionBlock(channels_out * (1 if bottleneck else 2), channels_in)
+        self.encoder = GatedFormerBlock(channels_in, channels_out)
+        self.decoder = GatedFormerBlock(channels_out * (1 if bottleneck else 2), channels_in)
 
     def encode(self, x):
         return self.encoder(x)

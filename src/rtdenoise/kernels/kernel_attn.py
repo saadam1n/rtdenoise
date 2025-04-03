@@ -13,18 +13,21 @@ class KernelAttention(torch.autograd.Function):
         qk0 : torch.Tensor, v0 : torch.Tensor, 
         qk1 : torch.Tensor, v1 : torch.Tensor, 
         qk2 : torch.Tensor, v2 : torch.Tensor, 
-        window_size : int
+        window_size : int, skip_center : bool
     ) -> torch.Tensor:
 
         single_slice = v0[:, :1, :, :]
         L = torch.empty_like(single_slice)
         m = torch.empty_like(single_slice)
 
+        skip_center = (1 if skip_center else 0)
+
         a = torch.ops.rtdenoise.kernel_attn.default(
             qk0, v0, 
             qk1, v1, 
             qk2, v2, 
             window_size, 
+            skip_center,
             L, m
         )
 
@@ -35,6 +38,7 @@ class KernelAttention(torch.autograd.Function):
             L, m, a
         )
         ctx.window_size = window_size
+        ctx.skip_center = skip_center
 
         return a
 
@@ -43,6 +47,7 @@ class KernelAttention(torch.autograd.Function):
     def backward(ctx, dLda : torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None]:
         qk0, v0, qk1, v1, qk2, v2,  L, m, a = ctx.saved_tensors
         window_size = ctx.window_size
+        skip_center = ctx.skip_center
 
         dLdqk0 = torch.zeros_like(qk0) 
         dLdqk1 = torch.zeros_like(qk1) if qk1 is not None else None
@@ -56,14 +61,16 @@ class KernelAttention(torch.autograd.Function):
             qk0, v0, 
             qk1, v1, 
             qk2, v2,  
-            window_size, L, m, a,
+            window_size, 
+            skip_center,
+            L, m, a,
             dLda, 
             dLdqk0, dLdv0,
             dLdqk1, dLdv1,
             dLdqk2, dLdv2
         )
 
-        return dLdqk0, dLdv0, dLdqk1, dLdv1, dLdqk2, dLdv2, None
+        return dLdqk0, dLdv0, dLdqk1, dLdv1, dLdqk2, dLdv2, None, None
     
     @staticmethod
     def _(qk : torch.Tensor, v : torch.Tensor, window_size : int):
@@ -81,11 +88,12 @@ def kernel_attn(
     qk0 : torch.Tensor, v0 : torch.Tensor, 
     qk1 : torch.Tensor, v1 : torch.Tensor, 
     qk2 : torch.Tensor, v2 : torch.Tensor, 
-    window_size : int
+    window_size : int, skip_center : bool
 ) -> torch.Tensor:
     return KernelAttention.apply(
         qk0, v0, 
         qk1, v1, 
         qk2, v2,  
-        window_size
+        window_size,
+        skip_center
     )
