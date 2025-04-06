@@ -1,10 +1,11 @@
 from ..models.base_denoiser import *
 
 from . import prebatched_dataset
+from . import loss_functions
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as F 
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
@@ -55,6 +56,9 @@ def reformat_inputs(data : tuple[torch.Tensor, torch.Tensor], device):
 
         inputs[:, :, 0:3] = mcol
         inputs[:, :, 3:6] = malb
+
+        reference = reference[:, :1]
+        inputs = inputs[:, :1]
 
     print(f"INP shape {inputs.shape}")
     print(f"REF shape {reference.shape}")
@@ -256,7 +260,7 @@ def train_model(
 
     scaler = torch.GradScaler()
 
-    loss_fn = torch.nn.L1Loss()
+    loss_fn = F.l1_loss
     losses = []
 
     for epoch in range(num_epochs):

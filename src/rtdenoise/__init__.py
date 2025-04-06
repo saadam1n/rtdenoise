@@ -7,6 +7,7 @@ from .models.single_frame_diffusion import *
 from .models.transformer_denoiser import *
 from .models.gcpe_transformer import *
 from .models.gcpe2_transformer import *
+from .models.overfit import *
 
 
 from .training import frame_dataset, train, fast_dataset

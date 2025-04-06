@@ -130,6 +130,42 @@ class FeedForwardReLU(nn.Module):
         return self.channel_mlp(input)
 
 
+class FeedForwardGELU(nn.Module):
+    """
+    A very basic Channel MLP that does two 1x1 convolutions. 
+    """
+    def __init__(self, channels_in, channels_out, channel_multiplier, has_skip = False):
+        super(FeedForwardGELU, self).__init__()
+
+        self.channel_mlp = nn.Sequential(
+            nn.BatchNorm2d(channels_in),
+            nn.Conv2d(channels_in, channel_multiplier * channels_in, kernel_size=1),
+            nn.GELU(),
+            nn.BatchNorm2d(channel_multiplier * channels_in),
+            nn.Conv2d(channel_multiplier * channels_in, channels_out, kernel_size=1),
+        )
+
+        self.has_skip = has_skip
+        if self.has_skip and channels_in != channels_out:
+            # Resnet's strategy for skip connection if channel in != channel out
+            self.skip_projection = nn.Sequential(
+                nn.BatchNorm2d(channels_in),
+                nn.Conv2d(channels_in, channels_out, kernel_size=1),
+            )
+
+        else:
+            self.skip_projection = None
+
+    def forward(self, input):
+        ffn_out =  self.channel_mlp(input)
+
+        if self.has_skip:
+            skip = self.skip_projection(input) if self.skip_projection is not None else input
+
+        layer_out = ffn_out + skip if self.has_skip else ffn_out
+
+        return layer_out
+
 class GatedConvolutionUnit(nn.Module):
     def __init__(self, channels_in):
         super(GatedConvolutionUnit, self).__init__()
@@ -159,7 +195,7 @@ class GatedFormerBlock(nn.Module):
 
         self.gcu = GatedConvolutionUnit(channels_in)
 
-        self.channel_mlp = FeedForwardReLU(channels_in, channels_out, channel_multiplier=2)
+        self.channel_mlp = FeedForwardGELU(channels_in, channels_out, channel_multiplier=2, has_skip=True)
 
 
     """
@@ -268,8 +304,17 @@ class UNetFastConvolutionBlock(nn.Module):
     def __init__(self, channels_in, channels_out, bottleneck):
         super(UNetFastConvolutionBlock, self).__init__()
 
-        self.encoder = GatedFormerBlock(channels_in, channels_out)
-        self.decoder = GatedFormerBlock(channels_out * (1 if bottleneck else 2), channels_in)
+        channels_din = channels_out * (1 if bottleneck else 2)
+
+        self.encoder = nn.Sequential(
+            GatedFormerBlock(channels_in, channels_out),
+            GatedFormerBlock(channels_out, channels_out)
+        )
+
+        self.decoder = nn.Sequential(
+            GatedFormerBlock(channels_din, channels_din),
+            GatedFormerBlock(channels_din, channels_in),
+        )
 
     def encode(self, x):
         return self.encoder(x)
@@ -855,6 +900,6 @@ class FastUNet(nn.Module):
     def skip_combine_func(self, skip, decoded):
         decoded = F.interpolate(decoded, size=skip.shape[2:], mode="bilinear", align_corners=False)
         if False:
-            return skip[i] + decoded
+            return skip + decoded
         else:
             return torch.cat((skip, decoded), dim=1)
