@@ -3,19 +3,69 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+
+class UpscaleAttention(torch.autograd.Function):
+    """Some Information about UpscaleAttention"""
+
+    @staticmethod
+    def forward(
+            ctx, 
+            q : torch.Tensor, 
+            k : torch.Tensor, 
+            v : torch.Tensor, 
+            b : torch.Tensor, 
+            kernel_size : int, 
+            scale_power : int
+        ) -> torch.Tensor:
+
+        o = torch.ops.rtdenoise.upscale_attn(q, k, v, b, kernel_size, scale_power)
+
+        return o
+
+    @staticmethod
+    def backward(ctx, grad_output):
+
+        raise NotImplementedError("Backward pass for Upscale attention has not been implemented yet!")
+
+        return None
+
+def upscale_attn(
+        q : torch.Tensor, 
+        k : torch.Tensor, 
+        v : torch.Tensor, 
+        b : torch.Tensor | None = None, 
+        kernel_size : int = 3, 
+        scale_power : int | None = None
+    ):
+
+    return UpscaleAttention.apply(
+        q, k, v, b,
+        kernel_size, scale_power
+    )
+
 """
 WARNING: not a fused kernel!
 This is a rough implementation using plain PyTorch. Expect high memory usage and slow performance.
 """
-def upscale_attn(q : torch.Tensor, k : torch.Tensor, v : torch.Tensor, bias : torch.Tensor | None = None):
+def upscale_attn_pytorch(
+        q : torch.Tensor, 
+        k : torch.Tensor, 
+        v : torch.Tensor, 
+        b : torch.Tensor | None = None, 
+        kernel_size : int = 3, 
+        scale_power : int | None = None
+    ):
+    if scale_power is not None:
+        print(f"Warning from upscale_attn_pytorch: the scale_power parameter has no bearing affect on output. The value passed in was {scale_power}")
+
     N, C, HU, WU = q.shape
     _, _, HD, WD = k.shape
 
     USHAPE = (HU, WU)
 
     # unfold k and v into 3x3 patches
-    kuf = F.unfold(k, kernel_size=3, padding=1).unflatten(2, (HD, WD))
-    vuf = F.unfold(v, kernel_size=3, padding=1).unflatten(2, (HD, WD))
+    kuf = F.unfold(k, kernel_size=kernel_size, padding=1).unflatten(2, (HD, WD))
+    vuf = F.unfold(v, kernel_size=kernel_size, padding=1).unflatten(2, (HD, WD))
 
     # upscale both into full resolution
     # utilize nearest neighbor sampling
@@ -40,7 +90,7 @@ def upscale_attn(q : torch.Tensor, k : torch.Tensor, v : torch.Tensor, bias : to
     # here L = 1 because we have only one query
     # S = 9 because we have 9 biases
     # input is (N, 9, H, W) so we have to swap a few dimensions
-    buf = bias.permute(0, 2, 3, 1).flatten(0, 2).unsqueeze(1) if bias is not None else None
+    buf = b.permute(0, 2, 3, 1).flatten(0, 2).unsqueeze(1) if b is not None else None
 
     # torch SPDA expects input format (N, H, L, D)
     # current format is (N, D, L, H, W)

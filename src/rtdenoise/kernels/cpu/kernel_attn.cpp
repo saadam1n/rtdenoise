@@ -496,6 +496,15 @@ namespace rtdenoise {
                 "Tensor? dLdqk2, Tensor? dLdv2"
             ") -> ()"
         );
+
+        // temporary solution
+        // we should ideally define each operator in its own file
+        m.def(
+            "upscale_attn("
+                "Tensor q, Tensor k, Tensor v, Tensor b, "
+                "int kernel_size, int scale_power"
+            ") -> Tensor"
+        );
     } 
 
     TORCH_LIBRARY_IMPL(rtdenoise, CPU, m) {
