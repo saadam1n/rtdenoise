@@ -8,6 +8,7 @@ from .models.transformer_denoiser import *
 from .models.gcpe_transformer import *
 from .models.gcpe2_transformer import *
 from .models.overfit import *
+from .models.gcpe_upscaler import *
 
 
 from .training import frame_dataset, train, fast_dataset

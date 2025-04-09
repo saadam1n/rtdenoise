@@ -45,7 +45,7 @@ if __name__ == "__main__":
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=num_workers, prefetch_factor=prefetch_factor)
 
     models = [
-        rtdenoise.OverfitNet()
+        rtdenoise.GCPE3()
     ]
 
     names = [
