@@ -6,10 +6,10 @@ import torch.optim as optim
 import rtdenoise
 import rtdenoise.kernels as K
 
-qr = torch.randn(8, 24, 64, 64, requires_grad=True)
-kr = torch.randn(8, 24, 16, 16, requires_grad=True)
-vr = torch.randn(8, 3, 16, 16, requires_grad=True)
-br = torch.randn(8, 9, 64, 64, requires_grad=True)
+qr = torch.randn(8, 24, 64, 64, requires_grad=True, device="cuda")
+kr = torch.randn(8, 24, 16, 16, requires_grad=True, device="cuda")
+vr = torch.randn(8, 3, 16, 16, requires_grad=True, device="cuda")
+br = torch.randn(8, 9, 64, 64, requires_grad=True, device="cuda")
 
 qo = qr.detach().requires_grad_()
 ko = kr.detach().requires_grad_()

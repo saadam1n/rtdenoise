@@ -28,9 +28,11 @@ setup(
         CUDAExtension(
             name='rtdenoise._C',
             sources=[
-                'src/rtdenoise/kernels/cuda/kernel_attn.cu',  
                 'src/rtdenoise/kernels/cpu/kernel_attn.cpp',
                 'src/rtdenoise/kernels/cpu/upscale_attn.cpp',
+                
+                'src/rtdenoise/kernels/cuda/kernel_attn.cu',  
+                'src/rtdenoise/kernels/cuda/upscale_attn.cu',
             ],
             extra_compile_args={
                 'cxx': ['-DPy_LIMITED_API=0x03090000', '-O3'], 
