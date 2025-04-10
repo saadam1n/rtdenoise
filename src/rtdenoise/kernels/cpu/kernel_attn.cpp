@@ -502,7 +502,21 @@ namespace rtdenoise {
         m.def(
             "upscale_attn("
                 "Tensor q, Tensor k, Tensor v, Tensor b, "
-                "int kernel_size, int scale_power"
+                "int kernel_size, int scale_power, "
+                "Tensor L, Tensor m"
+            ") -> Tensor"
+        );
+
+        m.def(
+            "upscale_attn_bwd("
+                "Tensor q, Tensor k, Tensor v, Tensor b, "
+                "int kernel_size, int scale_power, "
+                "Tensor o, Tensor L, Tensor m, "
+                "Tensor dLdo, "
+                "Tensor dLdq, "
+                "Tensor dLdk, "
+                "Tensor dLdv, "
+                "Tensor dLdb"
             ") -> Tensor"
         );
     } 

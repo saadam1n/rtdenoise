@@ -18,16 +18,36 @@ class UpscaleAttention(torch.autograd.Function):
             scale_power : int
         ) -> torch.Tensor:
 
-        o = torch.ops.rtdenoise.upscale_attn(q, k, v, b, kernel_size, scale_power)
+        L = torch.zeros_like(q[:, :1])
+        m = torch.zeros_like(q[:, :1])
+
+        o = torch.ops.rtdenoise.upscale_attn(q, k, v, b, kernel_size, scale_power, L, m)
+
+        ctx.save_for_backward(q, k, v, b, o, L, m)
+        ctx.kernel_size = kernel_size
+        ctx.scale_power = scale_power
 
         return o
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, dLdo):
 
-        raise NotImplementedError("Backward pass for Upscale attention has not been implemented yet!")
+        q, k, v, b, o, L, m = ctx.saved_tensors
+        kernel_size = ctx.kernel_size
+        scale_power = ctx.scale_power
 
-        return None
+        dLdq = torch.zeros_like(q)
+        dLdk = torch.zeros_like(k)
+        dLdv = torch.zeros_like(v)
+        dLdb = torch.zeros_like(b)
+
+        torch.ops.rtdenoise.upscale_attn_bwd(
+            q, k, v, b, kernel_size, scale_power, o, L, m,
+            dLdo, dLdq, dLdk, dLdv, dLdb
+        )
+
+
+        return dLdq, dLdk, dLdv, dLdb, None, None
 
 def upscale_attn(
         q : torch.Tensor, 
@@ -36,7 +56,7 @@ def upscale_attn(
         b : torch.Tensor | None = None, 
         kernel_size : int = 3, 
         scale_power : int | None = None
-    ):
+    ) -> torch.Tensor:
 
     return UpscaleAttention.apply(
         q, k, v, b,
