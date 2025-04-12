@@ -3,11 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+from torch.amp import custom_fwd, custom_bwd
 
 class UpscaleAttention(torch.autograd.Function):
     """Some Information about UpscaleAttention"""
 
     @staticmethod
+    @custom_fwd(cast_inputs=torch.float32, device_type="cuda")
     def forward(
             ctx, 
             q : torch.Tensor, 
@@ -30,6 +32,7 @@ class UpscaleAttention(torch.autograd.Function):
         return o
 
     @staticmethod
+    @custom_bwd(device_type="cuda")
     def backward(ctx, dLdo):
 
         q, k, v, b, o, L, m = ctx.saved_tensors

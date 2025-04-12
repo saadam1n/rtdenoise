@@ -154,10 +154,28 @@ class GCPE3(BaseDenoiser):
 
         b = self.bias_extractors[i](bi)
 
-        o = upscale_attn(q, k, v, b)
+        b = torch.zeros_like(b)
+
+        #op = upscale_attn_pytorch(q, k, v, b, self.window_size, i)
+        o = upscale_attn(q, k, v, b, self.window_size, i)
+
+
 
         return o
-    
+
+    """
+    IDNAF
+    NBG
+    Weight sharing
+    JDSS
+    ODIN
+
+    For graphics paper:
+    - Make figures better
+    - People like figures
+    - Illustatrator 
+    """ 
+
     def bias_input(self, fr, i):
         shape = fr.shape[2:]
 
@@ -192,4 +210,3 @@ class GCPE3(BaseDenoiser):
         xy = torch.stack((x, y), dim=0).unsqueeze(0)
 
         return xy
-

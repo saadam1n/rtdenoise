@@ -307,13 +307,23 @@ class UNetFastConvolutionBlock(nn.Module):
         channels_din = channels_out * (1 if bottleneck else 2)
 
         self.encoder = nn.Sequential(
-            GatedFormerBlock(channels_in, channels_out),
-            GatedFormerBlock(channels_out, channels_out)
+            nn.BatchNorm2d(channels_in),
+            nn.Conv2d(channels_in, channels_out, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.BatchNorm2d(channels_out),
+            nn.Conv2d(channels_out, channels_out, kernel_size=3, padding=1),
+            #RestormerConvolutionBlock(channels_in, channels_out),
+            #RestormerConvolutionBlock(channels_out, channels_out)
         )
 
         self.decoder = nn.Sequential(
-            GatedFormerBlock(channels_din, channels_din),
-            GatedFormerBlock(channels_din, channels_in),
+            nn.BatchNorm2d(channels_din),
+            nn.Conv2d(channels_din, channels_din, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.BatchNorm2d(channels_din),
+            nn.Conv2d(channels_din, channels_in, kernel_size=3, padding=1),
+            #RestormerConvolutionBlock(channels_din, channels_din),
+            #RestormerConvolutionBlock(channels_din, channels_in),
         )
 
     def encode(self, x):

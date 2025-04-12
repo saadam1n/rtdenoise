@@ -15,6 +15,34 @@ namespace rtdenoise {
         T logit_max = -9999;
     };
 
+    template<typename T>
+    __device__
+    T calc_bias(const int scale_power, const int y, const int x, int i, int j) {
+        T bias_factor = -3;
+
+        // calculate center position of this pixel
+        i = (i << scale_power) + (1 << (scale_power - 1));
+        j = (j << scale_power) + (1 << (scale_power - 1));
+
+        // try example to verify math
+        // full res is 1024
+        // downsampled is 32
+        // each pixel occupies 32 pixels
+        // scale power is 5
+        // suppose we are at 16 16
+        // we are then sampling pixel 0 0 
+        // offten by 2^4
+        // get 16 16
+        // right in the center
+
+        int offset = max(abs(y - i), abs(x - j));
+        T soff = (T)offset / (1 << scale_power);
+
+        T bias = bias_factor * soff;
+
+        return bias;
+    }
+
     template<typename T> 
     __device__
     UpscaleAttnResultCUDA<T> upscale_attn_cuda_pixel(
@@ -162,7 +190,7 @@ namespace rtdenoise {
 
         // parameter checks
         TORCH_CHECK(kernel_size % 2 == 1);
-        TORCH_CHECK(scale_power > 0);
+        //TORCH_CHECK(scale_power > 0);
 
         TORCH_CHECK(q.size(2) >> scale_power == k.size(2));
         TORCH_CHECK(q.size(3) >> scale_power == k.size(3));
@@ -414,7 +442,7 @@ namespace rtdenoise {
 
         // parameter checks
         TORCH_CHECK(kernel_size % 2 == 1);
-        TORCH_CHECK(scale_power > 0);
+        //TORCH_CHECK(scale_power > 0);
 
         TORCH_CHECK(q.size(2) >> scale_power == k.size(2));
         TORCH_CHECK(q.size(3) >> scale_power == k.size(3));

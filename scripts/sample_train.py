@@ -57,7 +57,7 @@ if __name__ == "__main__":
     ]
 
     optimizers = [
-        torch.optim.Adam(model.parameters(), lr=0.001) for model in parallel_models
+        torch.optim.Adam(model.parameters(), lr=0.0001) for model in parallel_models
     ]
 
     schedulers = [
