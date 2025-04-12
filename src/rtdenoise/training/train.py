@@ -57,8 +57,8 @@ def reformat_inputs(data : tuple[torch.Tensor, torch.Tensor], device):
         inputs[:, :, 0:3] = mcol
         inputs[:, :, 3:6] = malb
 
-        #inputs = inputs[:, :1]
-        #reference = reference[:, :1]
+        inputs = inputs[:, :1]
+        reference = reference[:, :1]
 
     print(f"INP shape {inputs.shape}")
     print(f"REF shape {reference.shape}")

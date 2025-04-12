@@ -21,7 +21,7 @@ def op_per_pixel_conv(image: torch.Tensor, kernel: torch.Tensor, kernel_size: in
 
     unfolded = F.unfold(image, kernel_size=kernel_size, padding=kernel_size // 2)
 
-    unfolded = unfolded.view(N, 3, 9, H, W)
+    unfolded = unfolded.view(N, -1, 9, H, W)
 
     filtered = unfolded * kernel.unsqueeze(1)
     filtered = filtered.sum(2)
@@ -306,24 +306,30 @@ class UNetFastConvolutionBlock(nn.Module):
 
         channels_din = channels_out * (1 if bottleneck else 2)
 
+        """
+        nn.BatchNorm2d(channels_in),
+        nn.Conv2d(channels_in, channels_out, kernel_size=3, padding=1),
+        nn.GELU(),
+        nn.BatchNorm2d(channels_out),
+        nn.Conv2d(channels_out, channels_out, kernel_size=3, padding=1),
+        """
+
+        """
+        nn.BatchNorm2d(channels_din),
+        nn.Conv2d(channels_din, channels_din, kernel_size=3, padding=1),
+        nn.GELU(),
+        nn.BatchNorm2d(channels_din),
+        nn.Conv2d(channels_din, channels_in, kernel_size=3, padding=1),
+        """
+
         self.encoder = nn.Sequential(
-            nn.BatchNorm2d(channels_in),
-            nn.Conv2d(channels_in, channels_out, kernel_size=3, padding=1),
-            nn.GELU(),
-            nn.BatchNorm2d(channels_out),
-            nn.Conv2d(channels_out, channels_out, kernel_size=3, padding=1),
-            #RestormerConvolutionBlock(channels_in, channels_out),
-            #RestormerConvolutionBlock(channels_out, channels_out)
+            RestormerConvolutionBlock(channels_in, channels_out),
+            RestormerConvolutionBlock(channels_out, channels_out)
         )
 
         self.decoder = nn.Sequential(
-            nn.BatchNorm2d(channels_din),
-            nn.Conv2d(channels_din, channels_din, kernel_size=3, padding=1),
-            nn.GELU(),
-            nn.BatchNorm2d(channels_din),
-            nn.Conv2d(channels_din, channels_in, kernel_size=3, padding=1),
-            #RestormerConvolutionBlock(channels_din, channels_din),
-            #RestormerConvolutionBlock(channels_din, channels_in),
+            RestormerConvolutionBlock(channels_din, channels_din),
+            RestormerConvolutionBlock(channels_din, channels_in),
         )
 
     def encode(self, x):
