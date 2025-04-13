@@ -41,7 +41,6 @@ def smape_antinegative(input : torch.Tensor, target : torch.Tensor, eps=0.01):
         ]
     ).unsqueeze(0).unsqueeze(0).expand(input.shape[1], -1, -1, -1).to(input.device).to(input.dtype)
 
-    print(f"PT {input.shape} {input.shape[1]}")
     igrad = F.conv2d(input, kernel, padding=1, groups=input.shape[1])
     tgrad = F.conv2d(target, kernel, padding=1, groups=input.shape[1])
     gradloss = (igrad - tgrad).abs()
@@ -54,6 +53,24 @@ def smape_antinegative(input : torch.Tensor, target : torch.Tensor, eps=0.01):
     reduced = per_pixel_loss.mean()
 
     return reduced
+
+def l1_grad(input : torch.Tensor, target : torch.Tensor):
+    input = flatten_frames(input)
+    target = flatten_frames(target)
+
+    kernel = torch.tensor(
+        [
+            [-1, -1, -1],
+            [-1,  8, -1],
+            [-1, -1, -1]
+        ]
+    ).unsqueeze(0).unsqueeze(0).expand(input.shape[1], -1, -1, -1).to(input.device).to(input.dtype)
+
+    igrad = F.conv2d(input, kernel, padding=1, groups=input.shape[1])
+    tgrad = F.conv2d(target, kernel, padding=1, groups=input.shape[1])
+    gradloss = (igrad - tgrad).abs()
+
+    return F.l1_loss(input, target) + torch.mean(gradloss)
 
 def smape_l2(input : torch.Tensor, target : torch.Tensor):
     return smape(input, target) + F.mse_loss(input, target)

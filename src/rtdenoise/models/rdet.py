@@ -25,7 +25,7 @@ class RealtimeDenoisingTransformer(BaseDenoiser):
         self.num_internal_channels = 24
         self.num_transformer_channels = 16
         self.unet_channels = [self.num_internal_channels, 24, 24, 32, 32, 48, 64]
-        self.num_filtering_scales = len(self.unet_channels) - 1
+        self.num_filtering_scales = len(self.unet_channels) - 1 # analyze the last level but don't filter it
 
         self.window_size = 3
         self.skip_center = False
@@ -49,15 +49,10 @@ class RealtimeDenoisingTransformer(BaseDenoiser):
         self.key_extractors = nn.ModuleList([ 
             nn.Sequential(
                 ImageLayerNorm(self.unet_channels[i]),
-                nn.Conv2d(self.unet_channels[i], self.num_transformer_channels, kernel_size=1)
+                nn.Conv2d(self.unet_channels[i], self.num_transformer_channels + 1, kernel_size=1)
             )
             for i in range(self.num_filtering_scales)
         ])
-
-        self.query_extractor = nn.Sequential(
-            ImageLayerNorm(self.unet_channels[0]),
-            nn.Conv2d(self.unet_channels[0], self.num_transformer_channels, kernel_size=1)
-        )
 
     def run_frame(self, frame_input : torch.Tensor, temporal_state):
         N = frame_input.size(0)
@@ -96,40 +91,66 @@ class RealtimeDenoisingTransformer(BaseDenoiser):
 
         # filter each partition indepedently
         # upscale using attention 
-        accum = None
+        dnaccum = None
+        lvaccum = None
         for i in reversed(range(self.num_filtering_scales)):
-            accum = checkpoint.checkpoint(
+            lvaccum = levels[:, i:].sum(1)
+
+            dnaccum = checkpoint.checkpoint(
                 self.filter_level, 
                 keys[i - 1] if i > 0 else None, 
                 keys[i],
                 levels[:, i],
-                accum,
+                dnaccum,
+                lvaccum,
                 i,
                 use_reentrant=False
             )
 
-        return accum
+
+        return dnaccum
 
 
-    def filter_level(self, query : torch.Tensor, key : torch.Tensor, level : torch.Tensor, accum : torch.Tensor, i : int):
+    def filter_level(self, query : torch.Tensor, key : torch.Tensor, level : torch.Tensor, dnaccum : torch.Tensor, lvaccum : torch.Tensor, i : int):
         texel_size = 2 ** i
+
+        # ignore first channel 
+        csource = query if query is not None else key
+        cweight = csource[:, :1].sigmoid()
+
+        query = query[:, 1:] if query is not None else None
+        key = key[:, 1:]
 
         dslevel = F.avg_pool2d(level, kernel_size=texel_size, stride=texel_size) if i != 0 else level
 
 
         # filter level
-        dnlevel = kernel_attn(key, dslevel, None, None, None, None, window_size=3, skip_center=False)
+        dnlevel = kernel_attn(key, dslevel, None, None, None, None, window_size=5, skip_center=False)
 
         # add accumulated after the fact
-        if accum is not None:
-            dnlevel = dnlevel + accum
+        if dnaccum is not None:
+            dnlevel = dnlevel + dnaccum
 
+
+        if i != 0:
+            rslevel = F.avg_pool2d(lvaccum, kernel_size=texel_size // 2, stride=texel_size // 2)
+            return checkpoint.checkpoint(resid_upsample_attn, query, key, dnlevel, rslevel, use_reentrant=False)
 
         # upsample to next level
+        # if we have a large receptive field use kernel attn instead
         if i != 0:
-            fslevel = upscale_attn(query, key, dnlevel, b = torch.zeros_like(query[:, :9]), kernel_size=3, scale_power=1)
+            # use bilinear super sampling first
+            bnlevel = F.interpolate(dnlevel, size=query.shape[2:], mode="bilinear", align_corners=False)
+            rslevel = F.avg_pool2d(lvaccum, kernel_size=texel_size // 2, stride=texel_size // 2) - bnlevel
 
-            return fslevel
+            drlevel = kernel_attn(query, rslevel, qk1=None, v1=None, qk2=None, v2=None, window_size=3, skip_center=False) 
+            fslevel = drlevel + bnlevel
+
+            ualevel = upscale_attn(query, key, dnlevel, b = torch.zeros_like(query[:, :9]), kernel_size=3, scale_power=1)
+
+            bulevel = fslevel * cweight + ualevel * (1 - cweight)
+
+            return bulevel
         else:
             return dnlevel
 
