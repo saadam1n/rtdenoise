@@ -17,14 +17,34 @@ from .components import *
 
 from ..kernels import *
 
+from .utils import *
+
+class SqueezeExcitation(nn.Module):
+    def __init__(self, num_channels):
+        super(SqueezeExcitation, self).__init__()
+
+        self.ffn = FeedForwardGELU(num_channels, num_channels, channel_multiplier=2, has_skip=True)
+
+
+
+    def forward(self, x):
+
+        mp = F.max_pool2d(x, kernel_size=15, stride=1, padding=7)
+
+        xp = x + mp
+
+        xf = self.ffn(xp)
+
+        return xf
+
 """
 Based on Diffusion Transformer paper and some downsampling.
 """
 class RealtimeDenoisingTransformer_ViT(BaseDenoiser):
     def init_components(self):
-        self.num_internal_channels = 24
-        self.num_transformer_channels = [16, 32]
-        self.unet_channels = [self.num_internal_channels, 24, 24, 24, 24, 24, 24]
+        self.num_internal_channels = 32
+        self.num_transformer_channels = [32, 32]
+        self.unet_channels = [self.num_internal_channels, 32, 32, 48, 48, 48, 64]
 
         self.true_num_input_channels = 9
         self.projector = nn.Sequential(
@@ -33,7 +53,7 @@ class RealtimeDenoisingTransformer_ViT(BaseDenoiser):
         )
 
         self.encoder_net = nn.Sequential(
-            FastUNet(channels=self.unet_channels, per_level_outputs=False)
+            FastUNet(channels=self.unet_channels, per_level_outputs=True)
         )
         
         self.patch_proj = nn.ModuleList([
@@ -47,9 +67,26 @@ class RealtimeDenoisingTransformer_ViT(BaseDenoiser):
             )
         ])
 
-        self.hfqpos_emb = nn.Parameter(torch.randn(256, self.num_transformer_channels[0]))
-        self.hfkpos_emb = nn.Parameter(torch.randn(400, self.num_transformer_channels[0]))
-        self.lffpos_emb = nn.Parameter(torch.randn(256, self.num_transformer_channels[1]))
+        self.us_token_proj = nn.ModuleList([
+            nn.Sequential(
+                ImageLayerNorm(self.unet_channels[i]),
+                nn.Conv2d(self.unet_channels[i], self.num_transformer_channels[0], kernel_size=1)
+            )
+            for i in range(5)
+        ])
+
+        self.weight_extractor = nn.Sequential(
+            FeedForwardGELU(self.num_internal_channels, 2, has_skip=True, channel_multiplier=2),
+            nn.Softmax(dim=1)
+        )
+
+        self.lffpos_emb = nn.Embedding(256, self.num_transformer_channels[1])
+
+        # initialize to same weight
+        self.hfqpos_emb = nn.Embedding(256, self.num_transformer_channels[0])
+        self.hfkpos_emb = nn.Embedding(400, self.num_transformer_channels[1])
+
+        self.uspos_emb = nn.Parameter(torch.randn(self.num_transformer_channels[0], 16, 16) / 256.0)
 
     def run_frame(self, frame_input : torch.Tensor, temporal_state):
         N = frame_input.size(0)
@@ -65,28 +102,47 @@ class RealtimeDenoisingTransformer_ViT(BaseDenoiser):
     
         features = self.projector(input)
 
-        latent = checkpoint.checkpoint_sequential(self.encoder_net, segments=1, input=features, use_reentrant=False)
+        latents = checkpoint.checkpoint_sequential(self.encoder_net, segments=1, input=features, use_reentrant=False)
 
-        filtered = self.filter_image(latent, color)
+        filtered = self.filter_image(latents, color)
 
         remod = albedo.pow(1.0 / 2.2) * filtered
 
         return (remod, None)
 
-    def filter_image(self, latent : torch.Tensor, color : torch.Tensor):
+    def filter_image(self, latents : torch.Tensor, color : torch.Tensor):
         # color is formed via subtracting consecutive average pools
         # each patch is 4x4 and we repeat the process 3 times
         # 
 
-        N, _, H, W = latent.shape
+        N, _, H, W = latents[0].shape
 
 
+        # now partition via splitting the frequencies
 
-        HFPDIM = (H // 16, W // 16)
-        LFPDIM = (H // 256, W // 256)
+        usq = self.us_token_proj[0](latents[0])
+        usk = self.us_token_proj[4](latents[4])
 
-        lfc = F.avg_pool2d(color, kernel_size=16, stride=16)
-        lff = self.patch_proj[1](latent)
+        if False:
+            level_weights = self.weight_extractor(latents[0])
+
+            lfc = level_weights[:, :1] * color
+            hfc = level_weights[:, 1:] * color
+
+            lfc = F.avg_pool2d(lfc, kernel_size=16, stride=16)
+
+        else:
+            lfc = F.avg_pool2d(color, kernel_size=16, stride=16)
+
+            # calculate residuals with high frequency
+            lfc_us = self.upsample_lf(usq, usk, lfc)
+            hfc = color - lfc_us
+
+            quick_save_img("/tmp/lfc.exr", lfc)
+            quick_save_img("/tmp/lfc_us.exr", lfc_us)
+            quick_save_img("/tmp/hfc.exr", hfc)
+
+        lff = self.patch_proj[1](latents[0])
 
         LFC_SHAPE = lfc.shape[2:]
         HFC_SHAPE = color.shape[2:]
@@ -94,7 +150,7 @@ class RealtimeDenoisingTransformer_ViT(BaseDenoiser):
         lfc = F.unfold(lfc, kernel_size=16, stride=16).unflatten(1, (-1, 256)).permute(0, 3, 2, 1).flatten(0, 1)
         lff = F.unfold(lff, kernel_size=16, stride=16).unflatten(1, (-1, 256)).permute(0, 3, 2, 1).flatten(0, 1)
 
-        lff = lff + self.lffpos_emb
+        lff = lff + self.lffpos_emb.weight
 
         dnlf = F.scaled_dot_product_attention(
             query=lff,
@@ -106,27 +162,19 @@ class RealtimeDenoisingTransformer_ViT(BaseDenoiser):
         dnlf = dnlf.unflatten(0, (N, -1)).permute(0, 3, 2, 1).flatten(1, 2)
         dnlf = F.fold(dnlf, LFC_SHAPE, kernel_size=16, stride=16)
 
-        # now it is (N, 3, H, W)
-        # notably H * W = L for high frequency
-        # so we will flatten now rather than later
-        dnlf = dnlf.flatten(2, 3).unsqueeze(2)
+        dnlf = checkpoint.checkpoint(self.upsample_lf, usq, usk, dnlf, use_reentrant=False)
 
-        # unflatten hfv
-
-        hfc = F.unfold(color, kernel_size=20, stride=16, padding=2).unflatten(1, (-1, 400))
-
-
-        hfc = hfc - dnlf
+        hfc = F.unfold(hfc, kernel_size=20, stride=16, padding=2).unflatten(1, (-1, 400))
 
         hfc = hfc.permute(0, 3, 2, 1).flatten(0, 1)
 
 
-        hff = self.patch_proj[0](latent)
+        hff = self.patch_proj[0](latents[0])
         hfq = F.unfold(hff, kernel_size=16, stride=16).unflatten(1, (-1, 256)).permute(0, 3, 2, 1).flatten(0, 1)
         hfk = F.unfold(hff, kernel_size=20, stride=16, padding=2).unflatten(1, (-1, 400)).permute(0, 3, 2, 1).flatten(0, 1)
 
-        hfq = hfq + self.hfqpos_emb
-        hfk = hfk + self.hfkpos_emb
+        hfq = hfq + self.hfqpos_emb.weight
+        hfk = hfk + self.hfkpos_emb.weight
 
         dnhf = F.scaled_dot_product_attention(
             query=hfq,
@@ -138,12 +186,27 @@ class RealtimeDenoisingTransformer_ViT(BaseDenoiser):
         # upscale now
         dnhf = dnhf.unflatten(0, (N, -1)).permute(0, 3, 2, 1)
 
-        dnhf = dnhf + dnlf
-
         dnhf = F.fold(dnhf.flatten(1, 2), HFC_SHAPE, kernel_size=16, stride=16)
-        
+        dnt = dnlf   
 
-        return dnhf
+        quick_save_img("/tmp/dnhf.exr", dnhf)
+        quick_save_img("/tmp/dnlf.exr", dnlf)
+        quick_save_img("/tmp/dnt.exr", dnt)
+
+
+        return dnt
+
+    def upsample_lf(self, query, key, color):
+        return F.interpolate(color, size=query.shape[2:], mode="bilinear")
+
+        # pos emb on query
+        YR = query.shape[2] // self.uspos_emb.shape[1]
+        XR = query.shape[3] // self.uspos_emb.shape[2]
+
+        rfmt_uspos_emb = self.uspos_emb.repeat(1, XR, YR).unsqueeze(0)
+        query = query + rfmt_uspos_emb
+
+        return upscale_attn(query, key, color, torch.zeros_like(query[:, :9]), kernel_size=3, scale_power=4)
 
 
         """
