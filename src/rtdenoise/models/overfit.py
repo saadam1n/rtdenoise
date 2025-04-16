@@ -8,31 +8,55 @@ from .components import *
 
 from ..kernels import *
 
+from .utils import *
+
+class ResNeXtBlock(nn.Module):
+    def __init__(self, num_input_channels, num_intermediate_channels, num_groups, dilation):
+        super().__init__()
+
+        self.num_groups = num_groups
+
+        self.encode = nn.Conv2d(num_input_channels, num_intermediate_channels * num_groups, kernel_size=1)
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(num_intermediate_channels * num_groups, num_intermediate_channels * num_groups, kernel_size=5, padding=2 * dilation, dilation=dilation, groups=self.num_groups),
+            nn.ReLU(),
+            nn.Conv2d(num_intermediate_channels * num_groups, num_intermediate_channels * num_groups, kernel_size=5, padding=2 * dilation, dilation=dilation, groups=self.num_groups),
+            nn.ReLU(),
+            nn.Conv2d(num_intermediate_channels * num_groups, num_intermediate_channels * num_groups, kernel_size=5, padding=2 * dilation, dilation=dilation, groups=self.num_groups),
+        )
+
+        self.decode = nn.Conv2d(num_intermediate_channels * num_groups, num_input_channels, kernel_size=1)
+
+    def forward(self, input):
+        skip = input
+
+        enc = self.encode(input)
+        conv = self.conv(enc)
+        dec = self.decode(conv)
+
+        output = dec + skip
+
+        return output
 
 class OverfitNet(BaseDenoiser):
     def init_components(self):
-        self.num_internal_channels = 24
-        self.num_transformer_channels = 16
-        self.unet_channels = [self.num_internal_channels, 24, 24, 32, 32, 48, 64]
-        self.num_filtering_scales = len(self.unet_channels) - 1
+        self.num_internal_channels = 48
 
         self.nz_scales = [5, 11, 17, 29]
-
-        self.window_size = 3
-        self.skip_center = False
 
         self.true_num_input_channels = (9) * 2 + len(self.nz_scales) * 2
         self.projector = nn.Sequential(
             nn.BatchNorm2d(self.true_num_input_channels),
-            RestormerConvolutionBlock(self.true_num_input_channels, self.num_internal_channels)
+            nn.Conv2d(self.true_num_input_channels, self.num_internal_channels, kernel_size=1)
         )
 
         self.encoder_net = nn.Sequential(
-            GatedFormerBlock(self.num_internal_channels, 128),
-            GatedFormerBlock(128, 128),
-            GatedFormerBlock(128, 128),
-            GatedFormerBlock(128, 128),
-            FeedForwardGELU(128, 3, channel_multiplier=2)
+            ResNeXtBlock(num_input_channels=self.num_internal_channels, num_intermediate_channels=6, num_groups=16, dilation=1),
+            ResNeXtBlock(num_input_channels=self.num_internal_channels, num_intermediate_channels=6, num_groups=16, dilation=1),
+            ResNeXtBlock(num_input_channels=self.num_internal_channels, num_intermediate_channels=6, num_groups=16, dilation=1),
+            ResNeXtBlock(num_input_channels=self.num_internal_channels, num_intermediate_channels=6, num_groups=16, dilation=1),
+            FeedForwardGELU(self.num_internal_channels, 3, channel_multiplier=2)
         )
 
     def run_frame(self, frame_input : torch.Tensor, temporal_state):
@@ -49,7 +73,6 @@ class OverfitNet(BaseDenoiser):
     
         if temporal_state is None or True:
             prev_input = torch.zeros_like(input)
-            hidden_state = [None] * self.num_filtering_scales
         else:
             prev_input, hidden_state = temporal_state
             prev_input = op_warp_tensor(prev_input, motionvec)
@@ -58,6 +81,12 @@ class OverfitNet(BaseDenoiser):
                  op_warp_tensor(state[1], motionvec))
                 for state in hidden_state
             ]
+
+        quick_save_img("/tmp/color1.exr", color)
+        quick_save_img("/tmp/color2.exr", F.avg_pool2d(color, kernel_size=2, stride=2))
+        quick_save_img("/tmp/color4.exr", F.avg_pool2d(color, kernel_size=4, stride=4))
+        quick_save_img("/tmp/color8.exr", F.avg_pool2d(color, kernel_size=8, stride=8))
+        quick_save_img("/tmp/color16.exr", F.avg_pool2d(color, kernel_size=16, stride=16))
 
 
         features = self.projector(

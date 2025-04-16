@@ -12,6 +12,7 @@ from .models.gcpe_upscaler import *
 from .models.fct import *
 from .models.rdet import *
 from .models.rdet_v import *
+from .models.rdet_l import *
 
 
 from .training import frame_dataset, train, fast_dataset

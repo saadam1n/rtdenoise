@@ -166,6 +166,21 @@ class FeedForwardGELU(nn.Module):
 
         return layer_out
 
+class SqueezeExcitation(nn.Module):
+    def __init__(self, num_channels):
+        super(SqueezeExcitation, self).__init__()
+
+        self.ffn = FeedForwardGELU(num_channels, num_channels, channel_multiplier=2, has_skip=True)
+
+    def forward(self, x):
+
+        mp = F.max_pool2d(x, kernel_size=9, stride=1, padding=4)
+        xp = x + mp
+        xf = self.ffn(xp)
+
+        return xf
+
+
 class GatedConvolutionUnit(nn.Module):
     def __init__(self, channels_in):
         super(GatedConvolutionUnit, self).__init__()
