@@ -16,17 +16,22 @@ class ResNeXtBlock(nn.Module):
 
         self.num_groups = num_groups
 
-        self.encode = nn.Conv2d(num_input_channels, num_intermediate_channels * num_groups, kernel_size=1)
-
-        self.conv = nn.Sequential(
-            nn.Conv2d(num_intermediate_channels * num_groups, num_intermediate_channels * num_groups, kernel_size=5, padding=2 * dilation, dilation=dilation, groups=self.num_groups),
-            nn.ReLU(),
-            nn.Conv2d(num_intermediate_channels * num_groups, num_intermediate_channels * num_groups, kernel_size=5, padding=2 * dilation, dilation=dilation, groups=self.num_groups),
-            nn.ReLU(),
-            nn.Conv2d(num_intermediate_channels * num_groups, num_intermediate_channels * num_groups, kernel_size=5, padding=2 * dilation, dilation=dilation, groups=self.num_groups),
+        self.encode = nn.Sequential(
+            nn.BatchNorm2d(num_input_channels),
+            nn.Conv2d(num_input_channels, num_intermediate_channels * num_groups, kernel_size=1),
+            nn.GELU(),
         )
 
-        self.decode = nn.Conv2d(num_intermediate_channels * num_groups, num_input_channels, kernel_size=1)
+        self.conv = nn.Sequential(
+            nn.BatchNorm2d(num_intermediate_channels * num_groups),
+            nn.Conv2d(num_intermediate_channels * num_groups, num_intermediate_channels * num_groups, kernel_size=5, padding=2 * dilation, dilation=dilation, groups=self.num_groups),
+            nn.GELU(),
+        )
+
+        self.decode = nn.Sequential(
+            nn.BatchNorm2d(num_intermediate_channels * num_groups),
+            nn.Conv2d(num_intermediate_channels * num_groups, num_input_channels, kernel_size=1),
+        )
 
     def forward(self, input):
         skip = input
@@ -56,7 +61,7 @@ class OverfitNet(BaseDenoiser):
             ResNeXtBlock(num_input_channels=self.num_internal_channels, num_intermediate_channels=6, num_groups=16, dilation=1),
             ResNeXtBlock(num_input_channels=self.num_internal_channels, num_intermediate_channels=6, num_groups=16, dilation=1),
             ResNeXtBlock(num_input_channels=self.num_internal_channels, num_intermediate_channels=6, num_groups=16, dilation=1),
-            FeedForwardGELU(self.num_internal_channels, 3, channel_multiplier=2)
+            FeedForwardGELU(self.num_internal_channels, 3, channel_multiplier=2, has_skip=True)
         )
 
     def run_frame(self, frame_input : torch.Tensor, temporal_state):
